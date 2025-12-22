@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Outputs - Hello Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            color: white;
+        }
+
+        header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .card-header {
+            background: #f8fafc;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-header h2 {
+            font-size: 1rem;
+            color: #334155;
+        }
+
+        .refresh-btn {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #4f46e5;
+        }
+
+        .file-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #f1f5f9;
+            transition: background 0.2s;
+        }
+
+        .file-item:last-child {
+            border-bottom: none;
+        }
+
+        .file-item:hover {
+            background: #f8fafc;
+        }
+
+        .file-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 1rem;
+            font-size: 1.25rem;
+        }
+
+        .file-info {
+            flex: 1;
+        }
+
+        .file-name {
+            font-weight: 600;
+            color: #1e293b;
+            text-decoration: none;
+            display: block;
+        }
+
+        .file-name:hover {
+            color: #6366f1;
+        }
+
+        .file-meta {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            margin-top: 0.25rem;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .action-btn {
+            background: #f1f5f9;
+            border: none;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            color: #64748b;
+            transition: all 0.2s;
+        }
+
+        .action-btn:hover {
+            background: #e2e8f0;
+            color: #334155;
+        }
+
+        .action-btn.delete:hover {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .empty-state {
+            padding: 3rem;
+            text-align: center;
+            color: #94a3b8;
+        }
+
+        .empty-state span {
+            font-size: 3rem;
+            display: block;
+            margin-bottom: 1rem;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-top: 1.5rem;
+            color: white;
+            text-decoration: none;
+            opacity: 0.9;
+            transition: opacity 0.2s;
+        }
+
+        .back-link:hover {
+            opacity: 1;
+        }
+
+        .loading {
+            padding: 2rem;
+            text-align: center;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Outputs</h1>
+            <p>Arquivos criados pelo Hello Agent</p>
+        </header>
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Arquivos</h2>
+                <button class="refresh-btn" onclick="loadFiles()">Atualizar</button>
+            </div>
+            <ul class="file-list" id="file-list">
+                <li class="loading">Carregando...</li>
+            </ul>
+        </div>
+
+        <a href="../../html/index.html" class="back-link">Voltar ao Chat</a>
+    </div>
+
+    <script>
+        async function loadFiles() {
+            const list = document.getElementById('file-list');
+            list.innerHTML = '<li class="loading">Carregando...</li>';
+
+            try {
+                const res = await fetch('http://localhost:8001/outputs');
+                const data = await res.json();
+
+                if (!data.files || data.files.length === 0) {
+                    list.innerHTML = `
+                        <li class="empty-state">
+                            <span>📁</span>
+                            Nenhum arquivo ainda
+                        </li>
+                    `;
+                    return;
+                }
+
+                list.innerHTML = data.files.map(file => `
+                    <li class="file-item">
+                        <div class="file-icon">${getFileIcon(file.name)}</div>
+                        <div class="file-info">
+                            <a href="${file.name}" class="file-name" target="_blank">${file.name}</a>
+                            <div class="file-meta">${formatSize(file.size)} - ${formatDate(file.modified)}</div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="action-btn" onclick="downloadFile('${file.name}')">Download</button>
+                            <button class="action-btn delete" onclick="deleteFile('${file.name}')">Excluir</button>
+                        </div>
+                    </li>
+                `).join('');
+
+            } catch (err) {
+                list.innerHTML = `
+                    <li class="empty-state">
+                        <span>⚠️</span>
+                        Erro ao carregar arquivos
+                    </li>
+                `;
+            }
+        }
+
+        function getFileIcon(name) {
+            const ext = name.split('.').pop().toLowerCase();
+            const icons = {
+                'txt': '📄',
+                'md': '📝',
+                'py': '🐍',
+                'js': '📜',
+                'json': '📋',
+                'html': '🌐',
+                'css': '🎨',
+                'png': '🖼️',
+                'jpg': '🖼️',
+                'jpeg': '🖼️',
+                'pdf': '📕'
+            };
+            return icons[ext] || '📄';
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function formatDate(timestamp) {
+            return new Date(timestamp).toLocaleString('pt-BR', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function downloadFile(name) {
+            const link = document.createElement('a');
+            link.href = name;
+            link.download = name;
+            link.click();
+        }
+
+        async function deleteFile(name) {
+            if (!confirm('Excluir ' + name + '?')) return;
+
+            try {
+                await fetch('http://localhost:8001/outputs/' + name, { method: 'DELETE' });
+                loadFiles();
+            } catch (err) {
+                alert('Erro ao excluir arquivo');
+            }
+        }
+
+        // Carregar ao iniciar
+        loadFiles();
+    </script>
+</body>
+</html>

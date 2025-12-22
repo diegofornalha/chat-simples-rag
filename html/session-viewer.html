@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Session Viewer</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        document.documentElement.dataset.theme = 'light';
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation Link -->
+        <a id="back-to-projects" class="nav-link-top" href="index_projects.html" title="Voltar para lista">⟲ Projetos</a>
+
+        <div class="chat-container">
+            <div id="selection-toolbar" class="selection-toolbar" style="display: none;">
+                <div class="selection-actions">
+                    <button id="select-all-btn" class="selection-btn">Selecionar tudo</button>
+                    <button id="clear-selection-btn" class="selection-btn secondary">Limpar seleção</button>
+                    <button id="delete-selected-btn" class="selection-btn danger">Excluir selecionadas</button>
+                </div>
+            </div>
+            <div id="messages" class="messages"></div>
+            <div id="typing-indicator" class="typing-indicator" style="display: none;">
+                <div class="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <div class="typing-info">
+                    <span class="typing-text">Claude está processando...</span>
+                    <span id="response-timer" class="response-timer">0.0s</span>
+                </div>
+                <button id="stop-btn" class="stop-button" onclick="stopRequest()">Parar</button>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <textarea id="message-input" placeholder="Digite sua mensagem..." rows="1"></textarea>
+            <button id="send-button" class="send-button">
+                <span class="button-text">Enviar</span>
+                <span class="button-icon">➤</span>
+            </button>
+            <button id="refresh-button" class="send-button" style="margin-left: 0.5rem;" title="Atualizar página">
+                <span class="button-icon">🔄</span>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Remove any debug elements that might exist
+        (function() {
+            // Remove debug panel if it exists
+            const debugPanel = document.getElementById('debug-visual-panel');
+            if (debugPanel) debugPanel.remove();
+            
+            // Remove debug toggle button if it exists
+            const debugToggle = document.getElementById('debug-toggle-btn');
+            if (debugToggle) debugToggle.remove();
+            
+            // Remove debug styles if they exist
+            const debugStyles = document.querySelectorAll('style');
+            debugStyles.forEach(style => {
+                if (style.textContent && style.textContent.includes('debug-visual-panel')) {
+                    style.remove();
+                }
+            });
+        })();
+        
+        if (window.marked) {
+            marked.setOptions({
+                gfm: true,
+                breaks: true,
+                highlight(code, lang) {
+                    if (window.hljs) {
+                        if (lang && hljs.getLanguage(lang)) {
+                            return hljs.highlight(code, { language: lang }).value;
+                        }
+                        return hljs.highlightAuto(code).value;
+                    }
+                    return code;
+                }
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text ?? '';
+            return div.innerHTML;
+        }
+
+        function renderMarkdown(text) {
+            if (!text) return '';
+            if (window.marked) {
+                return marked.parse(text);
+            }
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
+
+        function sanitizeHtml(html) {
+            if (!html) return '';
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+
+            doc.querySelectorAll('script, iframe, object, embed, link, style').forEach(el => el.remove());
+
+            doc.body.querySelectorAll('*').forEach(el => {
+                Array.from(el.attributes).forEach(attr => {
+                    const name = attr.name.toLowerCase();
+                    const value = (attr.value || '').trim().toLowerCase();
+                    if (name.startsWith('on') || value.startsWith('javascript:')) {
+                        el.removeAttribute(attr.name);
+                    }
+                });
+            });
+
+            // Adicionar target="_blank" em todos os links
+            doc.body.querySelectorAll('a').forEach(link => {
+                link.setAttribute('target', '_blank');
+                link.setAttribute('rel', 'noopener noreferrer');
+            });
+
+            return doc.body.innerHTML;
+        }
+
+        function renderMarkdownSafe(text) {
+            const raw = renderMarkdown(text);
+            return sanitizeHtml(raw);
+        }
+
+        function enhanceCodeBlocks(root) {
+            if (!root) return;
+
+            root.querySelectorAll('pre code').forEach(codeEl => {
+                if (window.hljs) {
+                    hljs.highlightElement(codeEl);
+                }
+
+                const text = codeEl.textContent || '';
+                const lines = text.split('\n').filter(Boolean).length;
+                const shouldCollapse = lines > 12 || text.length > 800;
+
+                if (shouldCollapse) {
+                    const pre = codeEl.parentElement;
+                    if (!pre) return;
+
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'code-block';
+
+                    const toggle = document.createElement('button');
+                    toggle.type = 'button';
+                    toggle.className = 'code-toggle';
+                    toggle.textContent = 'Ver código completo';
+
+                    pre.classList.add('collapsible');
+                    pre.parentNode.insertBefore(wrapper, pre);
+                    wrapper.appendChild(pre);
+                    wrapper.appendChild(toggle);
+
+                    toggle.addEventListener('click', () => {
+                        const expanded = pre.classList.toggle('expanded');
+                        toggle.textContent = expanded ? 'Ocultar código' : 'Ver código completo';
+                    });
+                }
+            });
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const SESSION_ID = urlParams.get('session_id');
+        let toolbarInitialized = false;
+        let currentEntries = [];
+        let messagesContainer = null;
+        let deletingMessage = false;
+        const selectedEntries = new Set();
+
+        let responseStartTime = null;
+        let responseTimerInterval = null;
+        let currentAbortController = null;
+
+        const selectionToolbar = document.getElementById('selection-toolbar');
+        const selectAllBtn = document.getElementById('select-all-btn');
+        const clearSelectionBtn = document.getElementById('clear-selection-btn');
+        const deleteSelectedBtn = document.getElementById('delete-selected-btn');
+
+        if (selectAllBtn) {
+            selectAllBtn.addEventListener('click', (event) => {
+                event.preventDefault();
+                selectAllEntries();
+            });
+        }
+
+        if (clearSelectionBtn) {
+            clearSelectionBtn.addEventListener('click', (event) => {
+                event.preventDefault();
+                selectedEntries.clear();
+                updateSelectionToolbar();
+                renderSessionEntries(messagesContainer, currentEntries);
+            });
+        }
+
+        if (deleteSelectedBtn) {
+            deleteSelectedBtn.addEventListener('click', (event) => {
+                event.preventDefault();
+                deleteSelectedEntries();
+            });
+        }
+
+        const refreshButton = document.getElementById('refresh-button');
+        if (refreshButton) {
+            refreshButton.addEventListener('click', () => {
+                window.location.reload();
+            });
+        }
+
+        if (!SESSION_ID) {
+            document.body.innerHTML = '<p style="padding:3rem;text-align:center">❌ Session ID missing. Use: ?session_id=...</p>';
+        } else {
+            loadSession(SESSION_ID);
+        }
+
+        async function loadSession(sessionId) {
+            const container = document.getElementById('messages');
+
+            messagesContainer = container;
+
+            try {
+                const res = await fetch('http://localhost:8001/sessions/' + sessionId);
+                const data = await res.json();
+
+                if (data.error) {
+                    container.innerHTML = '<p style="text-align:center;padding:3rem;color:#ef4444">❌ ' + data.error + '</p>';
+                    return;
+                }
+
+                const backBtn = document.getElementById('back-to-projects');
+                if (backBtn) {
+                    backBtn.onclick = () => window.location.href = 'index_projects.html';
+                    backBtn.innerHTML = '⟲ Projetos';
+                }
+
+                selectedEntries.clear();
+                currentEntries = Array.isArray(data.messages)
+                    ? data.messages.map((entry, index) => normalizeEntry(entry, index))
+                    : [];
+
+                initializeToolbar(container);
+                renderSessionEntries(container, currentEntries);
+
+                container.scrollTop = container.scrollHeight;
+                initWS(sessionId);
+            } catch (err) {
+                selectedEntries.clear();
+                currentEntries = [];
+                updateSelectionToolbar();
+                container.innerHTML = '<p style="text-align:center;padding:3rem;color:#ef4444">❌ Erro: ' + err.message + '</p>';
+            }
+        }
+
+        function initializeToolbar(container) {
+            if (toolbarInitialized) return;
+
+            const summaryToggle = document.getElementById('toggle-summary');
+            const systemToggle = document.getElementById('toggle-system');
+
+            if (summaryToggle) {
+                container.classList.toggle('hide-summaries', !summaryToggle.checked);
+                summaryToggle.addEventListener('change', () => {
+                    container.classList.toggle('hide-summaries', !summaryToggle.checked);
+                });
+            }
+
+            if (systemToggle) {
+                container.classList.toggle('hide-system', !systemToggle.checked);
+                systemToggle.addEventListener('change', () => {
+                    container.classList.toggle('hide-system', !systemToggle.checked);
+                });
+            }
+
+            toolbarInitialized = true;
+        }
+
+        function renderSessionEntries(container, entries) {
+            const target = container || messagesContainer;
+            if (!target) return;
+
+            const previousScroll = target.scrollTop;
+            const isAtBottom = Math.abs(target.scrollHeight - (target.scrollTop + target.clientHeight)) < 4;
+
+            target.innerHTML = '';
+
+            if (!Array.isArray(entries) || !entries.length) {
+                updateSelectionToolbar();
+                return;
+            }
+
+            entries.forEach((entry, index) => {
+                const normalizedEntry = normalizeEntry(entry, index);
+                const card = buildSessionEntry(normalizedEntry, index);
+                if (!card) return;
+
+                const key = getEntryKey(normalizedEntry, index);
+                if (key && selectedEntries.has(key)) {
+                    card.classList.add('selected-entry');
+                }
+
+                card.dataset.entryIndex = index;
+                card.dataset.entryKey = key || '';
+                target.appendChild(card);
+            });
+
+            if (isAtBottom) {
+                target.scrollTop = target.scrollHeight;
+            } else {
+                target.scrollTop = Math.min(previousScroll, target.scrollHeight);
+            }
+
+            updateSelectionToolbar();
+        }
+
+        function normalizeEntry(entry, index) {
+            if (entry && typeof entry === 'object') {
+                entry.__lineIndex = index;
+            }
+            return entry;
+        }
+
+        function reindexCurrentEntries() {
+            if (!Array.isArray(currentEntries)) return;
+            currentEntries.forEach((entry, idx) => {
+                if (entry && typeof entry === 'object') {
+                    entry.__lineIndex = idx;
+                }
+            });
+        }
+
+        function updateSelectionToolbar() {
+            if (!selectionToolbar) return;
+
+            const total = Array.isArray(currentEntries) ? currentEntries.length : 0;
+            const selectedCount = selectedEntries.size;
+
+            if (!total) {
+                selectionToolbar.style.display = 'none';
+                if (clearSelectionBtn) clearSelectionBtn.disabled = true;
+                if (deleteSelectedBtn) deleteSelectedBtn.disabled = true;
+                if (selectAllBtn) selectAllBtn.disabled = true;
+                return;
+            }
+
+            selectionToolbar.style.display = 'flex';
+
+            if (clearSelectionBtn) {
+                clearSelectionBtn.disabled = selectedCount === 0 || deletingMessage;
+            }
+
+            if (deleteSelectedBtn) {
+                deleteSelectedBtn.disabled = selectedCount === 0 || deletingMessage;
+            }
+
+            if (selectAllBtn) {
+                selectAllBtn.disabled = deletingMessage;
+            }
+        }
+
+        function getEntryKey(entry, index) {
+            if (!entry || typeof entry !== 'object') {
+                return 'line:' + (index ?? 0);
+            }
+
+            const candidates = [
+                entry.messageId,
+                entry.id,
+                entry.uuid,
+                entry.tool_use_id,
+                entry.toolUseId
+            ];
+
+            const inner = entry.message;
+            if (inner && typeof inner === 'object') {
+                candidates.push(inner.id, inner.messageId);
+            }
+
+            for (const value of candidates) {
+                if (typeof value === 'string' && value.trim()) {
+                    return 'id:' + value.trim();
+                }
+            }
+
+            const lineIndex = entry.__lineIndex ?? index;
+            return 'line:' + (typeof lineIndex === 'number' ? lineIndex : 0);
+        }
+
+        function toggleEntrySelection(entry, index, shouldSelect) {
+            const key = getEntryKey(entry, index);
+            if (!key) return;
+
+            if (shouldSelect) {
+                selectedEntries.add(key);
+            } else {
+                selectedEntries.delete(key);
+            }
+
+            updateSelectionToolbar();
+        }
+
+        function selectAllEntries() {
+            if (!Array.isArray(currentEntries) || !currentEntries.length) return;
+
+            currentEntries.forEach((entry, index) => {
+                const key = getEntryKey(entry, index);
+                if (key) {
+                    selectedEntries.add(key);
+                }
+            });
+
+            updateSelectionToolbar();
+            renderSessionEntries(messagesContainer, currentEntries);
+        }
+
+        function buildDeletePayload(entry, index) {
+            const payload = {};
+            const messageId = extractEntryMessageId(entry);
+            if (messageId) {
+                payload.message_id = messageId;
+            }
+
+            const lineIndex = entry && typeof entry === 'object' && typeof entry.__lineIndex === 'number'
+                ? entry.__lineIndex
+                : index;
+
+            if (typeof lineIndex === 'number' && lineIndex >= 0) {
+                payload.line_index = lineIndex;
+            }
+
+            return payload;
+        }
+
+        async function performDeleteRequest(payload) {
+            const res = await fetch('http://localhost:8001/sessions/' + SESSION_ID + '/messages', {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json().catch(() => ({}));
+
+            if (!res.ok || data?.error) {
+                throw new Error(data?.error || 'Falha ao remover mensagem.');
+            }
+
+            return data;
+        }
+
+        function cleanupAfterDeletion(entry, index) {
+            const key = getEntryKey(entry, index);
+            if (key) {
+                selectedEntries.delete(key);
+            }
+
+            let removeIndex = typeof index === 'number' ? index : -1;
+            if (removeIndex < 0 || removeIndex >= currentEntries.length || currentEntries[removeIndex] !== entry) {
+                removeIndex = currentEntries.indexOf(entry);
+            }
+
+            if (removeIndex === -1 && key) {
+                removeIndex = currentEntries.findIndex(item => getEntryKey(item) === key);
+            }
+
+            if (removeIndex !== -1) {
+                currentEntries.splice(removeIndex, 1);
+            }
+
+            reindexCurrentEntries();
+            renderSessionEntries(messagesContainer, currentEntries);
+        }
+
+        async function deleteEntry(entry, index, options = {}) {
+            if (!SESSION_ID) return false;
+
+            const { skipGuard = false, silent = false } = options;
+
+            if (deletingMessage && !skipGuard) {
+                return false;
+            }
+
+            const payload = buildDeletePayload(entry, index);
+
+            if (typeof payload.line_index !== 'number' && !payload.message_id) {
+                if (!silent) {
+                    console.error('Não foi possível identificar a entrada selecionada.');
+                }
+                return false;
+            }
+
+            if (!skipGuard) {
+                deletingMessage = true;
+                updateSelectionToolbar();
+            }
+
+            try {
+                await performDeleteRequest(payload);
+                cleanupAfterDeletion(entry, index);
+                console.log('🗑️', 'Entrada removida: ' + (payload.message_id || ('linha ' + payload.line_index)));
+                return true;
+            } catch (err) {
+                const errorText = err?.message || 'Erro ao remover mensagem.';
+                console.error('Erro ao remover mensagem:', errorText, err);
+                console.error('❌', errorText, { payload, silent });
+                return false;
+            } finally {
+                if (!skipGuard) {
+                    deletingMessage = false;
+                    updateSelectionToolbar();
+                }
+            }
+        }
+
+        async function deleteSelectedEntries() {
+            if (!SESSION_ID) return;
+            if (selectedEntries.size === 0) return;
+            if (deletingMessage) return;
+
+            const total = selectedEntries.size;
+            console.log('ℹ️', `Remoção em lote solicitada (${total} entradas).`);
+
+            deletingMessage = true;
+            updateSelectionToolbar();
+
+            if (selectionToolbar) {
+                selectionToolbar.classList.add('loading');
+            }
+
+            if (deleteSelectedBtn) {
+                deleteSelectedBtn.disabled = true;
+                deleteSelectedBtn.textContent = 'Removendo...';
+            }
+
+            let failures = 0;
+
+            const targets = currentEntries
+                .map((entry, index) => ({ entry, index, key: getEntryKey(entry, index) }))
+                .filter(item => selectedEntries.has(item.key));
+
+            for (const item of targets) {
+                const success = await deleteEntry(item.entry, item.index, { skipGuard: true, silent: true });
+                if (!success) {
+                    failures += 1;
+                }
+            }
+
+            selectedEntries.clear();
+            deletingMessage = false;
+
+            if (selectionToolbar) {
+                selectionToolbar.classList.remove('loading');
+            }
+
+            if (deleteSelectedBtn) {
+                deleteSelectedBtn.disabled = false;
+                deleteSelectedBtn.textContent = 'Excluir selecionadas';
+            }
+
+            if (failures > 0) {
+                console.warn('⚠️', `Falha ao remover ${failures} de ${targets.length} entradas.`);
+            } else {
+                console.log('✅', `Remoção em lote concluída (${targets.length} entradas).`);
+            }
+
+            updateSelectionToolbar();
+            renderSessionEntries(messagesContainer, currentEntries);
+        }
+
+        function buildSessionEntry(entry, index) {
+            if (!entry) return null;
+
+            if (entry.type === 'summary' || entry.summary) {
+                return createSummaryCard(entry, index);
+            }
+
+            const message = entry.message || entry;
+            const role = message?.role || entry.role;
+
+            // Detectar tool_result (resposta do MCP)
+            if (isToolResult(message)) {
+                const text = extractMessageText(message);
+                if (!text) return null;
+                const timestamp = entry.timestamp || message.timestamp || message.createdAt;
+                const toolName = extractToolName(message);
+                return createToolResultCard(text, timestamp, toolName, entry, index);
+            }
+
+            // Detectar tool_use (Claude chamando ferramenta)
+            if (isToolUse(message)) {
+                const timestamp = entry.timestamp || message.timestamp || message.createdAt;
+                return createToolUseCard(message, timestamp, entry, index);
+            }
+
+            if (role === 'user' || role === 'assistant') {
+                const text = extractMessageText(message);
+                if (!text) return null;
+                const timestamp = entry.timestamp || message.timestamp || message.createdAt;
+                return createMessageCard(role, text, timestamp, entry, index);
+            }
+
+            return createSystemCard(entry, index);
+        }
+
+        function isToolResult(message) {
+            if (!message) return false;
+            const content = message.content;
+            if (Array.isArray(content)) {
+                return content.some(block => block?.type === 'tool_result');
+            }
+            return false;
+        }
+
+        function isToolUse(message) {
+            if (!message) return false;
+            const content = message.content;
+            if (Array.isArray(content)) {
+                return content.some(block => block?.type === 'tool_use');
+            }
+            return false;
+        }
+
+        function extractToolName(message) {
+            if (!message?.content) return 'MCP';
+            const content = message.content;
+            if (Array.isArray(content)) {
+                const toolBlock = content.find(block => block?.type === 'tool_use' || block?.type === 'tool_result');
+                if (toolBlock?.name) {
+                    // Extrair nome amigavel: mcp__hello-agent-tools__create_file -> create_file
+                    const parts = toolBlock.name.split('__');
+                    return parts[parts.length - 1] || toolBlock.name;
+                }
+            }
+            return 'MCP';
+        }
+
+        function createToolResultCard(text, timestamp, toolName, entry, index) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message tool-result';
+
+            const header = document.createElement('div');
+            header.className = 'message-header';
+
+            const name = document.createElement('strong');
+            name.textContent = 'MCP: ' + toolName;
+
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+
+            const time = document.createElement('span');
+            time.className = 'timestamp';
+            time.textContent = formatTimestamp(timestamp, false);
+
+            meta.appendChild(time);
+            header.append(name, meta);
+
+            const actions = createEntryActions(index, entry);
+            if (actions) header.appendChild(actions);
+
+            const content = document.createElement('div');
+            content.className = 'message-content';
+
+            const body = document.createElement('div');
+            body.className = 'message-body';
+
+            body.innerHTML = renderMarkdownSafe(text);
+            enhanceCodeBlocks(body);
+
+            content.appendChild(body);
+            wrapper.append(header, content);
+
+            return wrapper;
+        }
+
+        function createToolUseCard(message, timestamp, entry, index) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message tool-use';
+
+            const header = document.createElement('div');
+            header.className = 'message-header';
+
+            const content = message.content || [];
+            const toolBlock = content.find(block => block?.type === 'tool_use');
+            const toolName = toolBlock?.name || 'ferramenta';
+            const friendlyName = toolName.split('__').pop();
+
+            const name = document.createElement('strong');
+            name.textContent = 'Claude usa: ' + friendlyName;
+
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+
+            const time = document.createElement('span');
+            time.className = 'timestamp';
+            time.textContent = formatTimestamp(timestamp, false);
+
+            meta.appendChild(time);
+            header.append(name, meta);
+
+            const actions = createEntryActions(index, entry);
+            if (actions) header.appendChild(actions);
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+
+            const body = document.createElement('div');
+            body.className = 'message-body';
+
+            if (toolBlock?.input) {
+                const inputStr = JSON.stringify(toolBlock.input, null, 2);
+                body.innerHTML = '<pre><code>' + escapeHtml(inputStr) + '</code></pre>';
+            }
+
+            contentDiv.appendChild(body);
+            wrapper.append(header, contentDiv);
+
+            return wrapper;
+        }
+
+        function extractMessageText(message) {
+            if (!message) return '';
+
+            const content = message.content ?? message.text ?? '';
+
+            if (typeof content === 'string') {
+                return formatToolResult(content.trim());
+            }
+
+            if (Array.isArray(content)) {
+                return content
+                    .filter(block => block && (block.type === 'text' || block.type === 'tool_result'))
+                    .map(block => {
+                        const blockContent = block.text || block.content || '';
+                        const text = typeof blockContent === 'string' ? blockContent.trim() : '';
+                        return formatToolResult(text);
+                    })
+                    .filter(Boolean)
+                    .join('\n');
+            }
+
+            if (typeof content === 'object' && content !== null) {
+                const text = content.text || content.content || '';
+                return formatToolResult(typeof text === 'string' ? text.trim() : '');
+            }
+
+            return '';
+        }
+
+        function formatToolResult(text) {
+            if (!text) return '';
+
+            // Tentar parsear JSON de tool_result
+            try {
+                if (text.startsWith('{') && text.includes('"result"')) {
+                    const parsed = JSON.parse(text);
+                    if (parsed.result) {
+                        // Formatar resultado de forma amigavel
+                        const result = parsed.result;
+
+                        // Arquivo criado
+                        if (result.includes('Arquivo criado:')) {
+                            const path = result.replace('Arquivo criado:', '').trim();
+                            const filename = path.split('/').pop();
+                            const outputsUrl = 'http://localhost:3000/backend/outputs/';
+                            const fileUrl = outputsUrl + filename;
+                            return '**Arquivo criado com sucesso**\n\n' +
+                                '[`' + filename + '`](' + fileUrl + ')\n\n' +
+                                '[Abrir pasta outputs](' + outputsUrl + ')';
+                        }
+
+                        // Arquivo deletado
+                        if (result.includes('deletado')) {
+                            return '**Arquivo removido**\n\n' + result;
+                        }
+
+                        // Lista de arquivos
+                        if (result.startsWith('-')) {
+                            const outputsUrl = 'http://localhost:3000/backend/outputs/';
+                            return '**Arquivos na pasta outputs:**\n\n' + result + '\n\n[Abrir pasta](' + outputsUrl + ')';
+                        }
+
+                        return result;
+                    }
+                }
+            } catch (e) {
+                // Nao e JSON, retorna texto original
+            }
+
+            return text;
+        }
+
+        function createMessageCard(role, text, timestamp, entry, index) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
+
+            const header = document.createElement('div');
+            header.className = 'message-header';
+
+            const name = document.createElement('strong');
+            name.textContent = role === 'user' ? '👤 Você' : '🤖 Claude';
+
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+
+            const time = document.createElement('span');
+            time.className = 'timestamp';
+            time.textContent = formatTimestamp(timestamp, false);
+
+            meta.appendChild(time);
+            header.append(name, meta);
+
+            const actions = createEntryActions(index, entry);
+            if (actions) header.appendChild(actions);
+
+            const content = document.createElement('div');
+            content.className = 'message-content';
+
+            const body = document.createElement('div');
+            body.className = 'message-body';
+
+            body.innerHTML = renderMarkdownSafe(text);
+            enhanceCodeBlocks(body);
+
+            content.appendChild(body);
+            wrapper.append(header, content);
+
+            return wrapper;
+        }
+
+        function createSummaryCard(entry, index) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'session-entry summary';
+
+            const header = document.createElement('div');
+            header.className = 'session-entry-header';
+
+            const title = document.createElement('div');
+            title.className = 'session-entry-title';
+            title.textContent = '📊 Resumo automático';
+
+            const meta = document.createElement('span');
+            meta.className = 'session-entry-meta';
+            meta.textContent = formatTimestamp(entry.timestamp, true);
+
+            header.append(title, meta);
+
+            const actions = createEntryActions(index, entry);
+            if (actions) header.appendChild(actions);
+
+            const body = document.createElement('div');
+            body.className = 'session-entry-body';
+            body.innerHTML = renderMarkdown(entry.summary || '');
+            enhanceCodeBlocks(body);
+
+            wrapper.append(header, body);
+            return wrapper;
+        }
+
+        function createSystemCard(entry, index) {
+            const wrapper = document.createElement('div');
+            const isError = detectError(entry);
+            wrapper.className = 'session-entry system' + (isError ? ' error' : '');
+
+            const header = document.createElement('div');
+            header.className = 'session-entry-header';
+
+            const title = document.createElement('div');
+            title.className = 'session-entry-title';
+            title.textContent = (isError ? '⚠️' : '🛠️') + ' ' + (deriveSystemTitle(entry) || 'Evento do sistema');
+
+            const meta = document.createElement('span');
+            meta.className = 'session-entry-meta';
+            meta.textContent = formatTimestamp(entry.timestamp || entry.message?.timestamp, true);
+
+            header.append(title, meta);
+
+            const actions = createEntryActions(index, entry);
+            if (actions) header.appendChild(actions);
+
+            const body = document.createElement('div');
+            body.className = 'session-entry-body';
+
+            const pre = document.createElement('pre');
+            pre.textContent = truncate(JSON.stringify(entry, null, 2));
+
+            body.appendChild(pre);
+            wrapper.append(header, body);
+
+            return wrapper;
+        }
+
+        function createEntryActions(index, entry) {
+            if (index == null || index < 0) return null;
+
+            const container = document.createElement('div');
+            container.className = 'entry-actions';
+
+            const selectWrapper = document.createElement('label');
+            selectWrapper.className = 'entry-select';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'entry-checkbox';
+
+            const key = getEntryKey(entry, index);
+            if (key && selectedEntries.has(key)) {
+                checkbox.checked = true;
+            }
+
+            checkbox.addEventListener('change', (event) => {
+                event.stopPropagation();
+                const shouldSelect = checkbox.checked;
+                toggleEntrySelection(entry, index, shouldSelect);
+                const card = event.currentTarget.closest('.message, .session-entry');
+                if (card) {
+                    card.classList.toggle('selected-entry', shouldSelect);
+                }
+            });
+
+            selectWrapper.appendChild(checkbox);
+            container.appendChild(selectWrapper);
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'entry-action-btn delete';
+            deleteBtn.textContent = 'Excluir';
+            deleteBtn.disabled = deletingMessage;
+
+            deleteBtn.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                const preview = getEntryPreview(entry);
+                console.log('ℹ️', 'Solicitada remoção individual', { preview });
+
+                const originalLabel = deleteBtn.textContent;
+                deleteBtn.disabled = true;
+                deleteBtn.textContent = 'Removendo...';
+
+                const success = await deleteEntry(entry, index);
+
+                if (!success) {
+                    deleteBtn.disabled = false;
+                    deleteBtn.textContent = originalLabel;
+                } else {
+                    console.log('✅', 'Entrada removida com sucesso');
+                }
+            });
+
+            container.appendChild(deleteBtn);
+            return container;
+        }
+
+        function getEntryPreview(entry) {
+            try {
+                if (!entry) return 'Entrada sem detalhes.';
+
+                if (entry.summary) {
+                    return 'Resumo: ' + String(entry.summary).slice(0, 120);
+                }
+
+                if (entry.message) {
+                    const text = extractMessageText(entry.message);
+                    if (text) return text.slice(0, 120);
+                }
+
+                if (entry.content) {
+                    const text = Array.isArray(entry.content) ? entry.content.join(' ') : String(entry.content);
+                    if (text) return text.slice(0, 120);
+                }
+
+                return JSON.stringify(entry).slice(0, 120);
+            } catch (err) {
+                return 'Entrada selecionada.';
+            }
+        }
+
+        function extractEntryMessageId(entry) {
+            if (!entry) return null;
+
+            const candidates = [entry.messageId, entry.id, entry.uuid];
+
+            if (entry.message && typeof entry.message === 'object') {
+                candidates.push(entry.message.id, entry.message.messageId);
+            }
+
+            for (const value of candidates) {
+                if (typeof value === 'string' && value.trim()) {
+                    return value;
+                }
+            }
+            return null;
+        }
+
+        function deriveSystemTitle(entry) {
+            if (entry.type && entry.type !== 'message') return entry.type;
+            if (entry.message?.type && entry.message.type !== 'message') return entry.message.type;
+            if (entry.tool_use_id || entry.toolUseId) return 'tool_result';
+            if (entry.message?.content && Array.isArray(entry.message.content)) {
+                const block = entry.message.content.find(item => item?.type && item.type !== 'text');
+                if (block?.type) return block.type;
+            }
+            return entry.role || 'evento';
+        }
+
+        function detectError(entry) {
+            if (entry.type === 'error' || entry.level === 'error') return true;
+            if (entry.toolUseResult?.is_error) return true;
+            const serialized = JSON.stringify(entry).toLowerCase();
+            return serialized.includes('error') || serialized.includes('denied');
+        }
+
+        function truncate(text, max = 800) {
+            if (!text) return '';
+            return text.length > max ? text.slice(0, max) + '…' : text;
+        }
+
+        function formatTimestamp(value, includeDate) {
+            if (!value) return '';
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return includeDate ? value : value;
+
+            if (includeDate) {
+                return date.toLocaleString('pt-BR', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
+
+            return date.toLocaleTimeString('pt-BR', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function showTypingIndicator() {
+            const typingIndicator = document.getElementById('typing-indicator');
+            if (typingIndicator) {
+                typingIndicator.style.display = 'flex';
+            }
+            startResponseTimer();
+        }
+
+        function hideTypingIndicator() {
+            const typingIndicator = document.getElementById('typing-indicator');
+            if (typingIndicator) {
+                typingIndicator.style.display = 'none';
+            }
+            stopResponseTimer();
+        }
+
+        function startResponseTimer() {
+            responseStartTime = Date.now();
+
+            if (responseTimerInterval) {
+                clearInterval(responseTimerInterval);
+            }
+
+            const timerElement = document.getElementById('response-timer');
+            responseTimerInterval = setInterval(() => {
+                const elapsed = (Date.now() - responseStartTime) / 1000;
+                if (timerElement) {
+                    timerElement.textContent = `${elapsed.toFixed(1)}s`;
+
+                    if (elapsed > 10) {
+                        timerElement.style.color = '#ef4444';
+                    } else if (elapsed > 5) {
+                        timerElement.style.color = '#f59e0b';
+                    } else {
+                        timerElement.style.color = '#10b981';
+                    }
+                }
+            }, 100);
+        }
+
+        function stopResponseTimer() {
+            if (responseTimerInterval) {
+                clearInterval(responseTimerInterval);
+                responseTimerInterval = null;
+            }
+
+            if (responseStartTime) {
+                const finalTime = Date.now() - responseStartTime;
+                console.log('ℹ️', `Tempo de resposta: ${finalTime}ms`);
+            }
+
+            responseStartTime = null;
+            const timerElement = document.getElementById('response-timer');
+            if (timerElement) {
+                timerElement.style.color = '';
+            }
+        }
+
+        function initWS(sid) {
+            console.log('ℹ️', 'Sessao ativa: ' + sid);
+
+            const input = document.getElementById('message-input');
+            const btn = document.getElementById('send-button');
+
+            if (input) {
+                input.placeholder = 'Continue a conversa...';
+                input.disabled = false;
+            }
+            if (btn) {
+                btn.disabled = false;
+                btn.addEventListener('click', () => sendMessage());
+            }
+
+            if (input) {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
+        }
+
+        function stopRequest() {
+            if (currentAbortController) {
+                currentAbortController.abort();
+                currentAbortController = null;
+                hideTypingIndicator();
+
+                const input = document.getElementById('message-input');
+                const btn = document.getElementById('send-button');
+                if (input) input.disabled = false;
+                if (btn) btn.disabled = false;
+
+                console.log('Requisicao cancelada pelo usuario');
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('message-input');
+            const btn = document.getElementById('send-button');
+            const message = input?.value?.trim();
+
+            if (!message) return;
+
+            // Desabilitar enquanto envia
+            if (input) input.disabled = true;
+            if (btn) btn.disabled = true;
+
+            // Adicionar mensagem do usuario na UI
+            const userEntry = {
+                type: 'user',
+                message: { role: 'user', content: message },
+                timestamp: new Date().toISOString()
+            };
+            currentEntries.push(normalizeEntry(userEntry, currentEntries.length));
+            renderSessionEntries(messagesContainer, currentEntries);
+
+            // Limpar input
+            if (input) input.value = '';
+
+            // Mostrar indicador de digitacao
+            showTypingIndicator();
+
+            // Criar AbortController para poder cancelar
+            currentAbortController = new AbortController();
+
+            try {
+                const res = await fetch('http://localhost:8001/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message }),
+                    signal: currentAbortController.signal
+                });
+
+                const data = await res.json();
+
+                // Adicionar resposta do assistente
+                const assistantEntry = {
+                    type: 'assistant',
+                    message: { role: 'assistant', content: [{ type: 'text', text: data.response }] },
+                    timestamp: new Date().toISOString()
+                };
+                currentEntries.push(normalizeEntry(assistantEntry, currentEntries.length));
+                renderSessionEntries(messagesContainer, currentEntries);
+
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    console.log('Requisicao cancelada');
+                } else {
+                    console.error('Erro ao enviar:', err);
+                    alert('Erro ao enviar mensagem: ' + err.message);
+                }
+            } finally {
+                currentAbortController = null;
+                hideTypingIndicator();
+                if (input) input.disabled = false;
+                if (btn) btn.disabled = false;
+                if (input) input.focus();
+            }
+        }
+
+        function createStreamingAssistantMessage(container) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message assistant';
+
+            const header = document.createElement('div');
+            header.className = 'message-header';
+
+            const name = document.createElement('strong');
+            name.textContent = '🤖 Claude';
+
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+
+            const counter = document.createElement('span');
+            counter.className = 'chunk-counter';
+            counter.textContent = 'Chunks: 0';
+
+            const timestamp = document.createElement('span');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
+
+            meta.append(counter, timestamp);
+            header.append(name, meta);
+
+            const content = document.createElement('div');
+            content.className = 'message-content';
+
+            const paragraph = document.createElement('p');
+            paragraph.style.whiteSpace = 'pre-wrap';
+
+            content.appendChild(paragraph);
+            wrapper.append(header, content);
+
+            container.appendChild(wrapper);
+            container.scrollTop = container.scrollHeight;
+
+            return { wrapper, paragraph, counter, timestamp };
+        }
+    </script>
+</body>
+</html>

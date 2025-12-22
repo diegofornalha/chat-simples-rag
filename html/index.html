@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Chat - Streaming Real</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        (function() {
+            try {
+                const stored = localStorage.getItem('claude_chat_theme');
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                const theme = stored || (prefersDark ? 'dark' : 'light');
+                document.documentElement.dataset.theme = theme;
+            } catch (err) {
+                console.warn('Theme init error', err);
+            }
+        })();
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation Link -->
+        <a class="nav-link-top" href="index_projects.html" title="Ir para projetos">⟲ Projetos</a>
+
+        <!-- Chat Container -->
+        <div class="chat-container">
+            <div class="chat-toolbar">
+                <div class="toolbar-left">
+                    <a id="history-link" class="toolbar-link" href="index_projects.html" title="Ver histórico de sessões">📁 Histórico</a>
+                    <button id="new-chat-btn" class="toolbar-link" style="border: none; background: none; cursor: pointer; color: inherit; font: inherit;" title="Iniciar novo chat">✨ Novo Chat</button>
+                </div>
+                <div class="toolbar-right">
+                    <span id="status" class="status-pill">🟡</span>
+                </div>
+            </div>
+            <div id="messages" class="messages">
+            </div>
+
+            <!-- Typing indicator com contador -->
+            <div id="typing-indicator" class="typing-indicator" style="display: none;">
+                <div class="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <div class="typing-info">
+                    <span class="typing-text">Claude está processando...</span>
+                    <span id="response-timer" class="response-timer">0.0s</span>
+                </div>
+                <button id="stop-btn" class="stop-button" onclick="stopRequest()">Parar</button>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-container">
+            <textarea
+                id="message-input"
+                placeholder="Digite sua mensagem..."
+                rows="1"
+            ></textarea>
+            <button id="send-button" class="send-button">
+                <span class="button-text">Enviar</span>
+                <span class="button-icon">➤</span>
+            </button>
+            <button id="refresh-button" class="send-button" style="margin-left: 0.5rem;" title="Atualizar página">
+                <span class="button-icon">🔄</span>
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        // Remove any debug elements that might exist
+        (function() {
+            // Remove debug panel if it exists
+            const debugPanel = document.getElementById('debug-visual-panel');
+            if (debugPanel) debugPanel.remove();
+            
+            // Remove debug toggle button if it exists
+            const debugToggle = document.getElementById('debug-toggle-btn');
+            if (debugToggle) debugToggle.remove();
+            
+            // Remove debug styles if they exist
+            const debugStyles = document.querySelectorAll('style');
+            debugStyles.forEach(style => {
+                if (style.textContent && style.textContent.includes('debug-visual-panel')) {
+                    style.remove();
+                }
+            });
+        })();
+    </script>
+    <script src="../js/debug.js"></script>
+    <script src="../js/templates.js"></script>
+    <script src="../js/metrics.js"></script>
+    <script src="../js/search.js"></script>
+    <script src="../js/notifications.js"></script>
+    <script src="../js/autosave.js"></script>
+    <script src="../js/tool-indicator.js"></script>
+    <script src="../js/shortcuts.js"></script>
+    <script src="../js/app.js"></script>
+</body>
+</html>

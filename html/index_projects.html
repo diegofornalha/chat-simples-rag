@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projetos - Claude Sessions</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <script>
+        document.documentElement.dataset.theme = 'light';
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation Link -->
+        <a class="nav-link-top" href="index.html" title="Ir para o chat">⟲ Chat</a>
+
+        <div class="chat-container">
+            <div id="sessions-list" class="messages sessions-list"></div>
+        </div>
+    </div>
+
+    <script>
+        // Remove any debug elements that might exist
+        (function() {
+            // Remove debug panel if it exists
+            const debugPanel = document.getElementById('debug-visual-panel');
+            if (debugPanel) debugPanel.remove();
+            
+            // Remove debug toggle button if it exists
+            const debugToggle = document.getElementById('debug-toggle-btn');
+            if (debugToggle) debugToggle.remove();
+            
+            // Remove debug styles if they exist
+            const debugStyles = document.querySelectorAll('style');
+            debugStyles.forEach(style => {
+                if (style.textContent && style.textContent.includes('debug-visual-panel')) {
+                    style.remove();
+                }
+            });
+        })();
+        
+        window.addEventListener('load', async () => {
+            const container = document.getElementById('sessions-list');
+
+            try {
+                const response = await fetch('http://localhost:8001/sessions');
+                const data = await response.json();
+
+                console.log('✅', data.count + ' sessões encontradas');
+
+                if (data.sessions.length === 0) {
+                    container.innerHTML = '<p class="empty-state">Nenhuma sessão encontrada</p>';
+                    return;
+                }
+
+                // Detectar última sessão acessada via localStorage ou documento.referrer
+                const lastSessionId = localStorage.getItem('last_session_id');
+
+                data.sessions.forEach((session, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'session-card';
+
+                    // Marcar sessão mais recente como ativa
+                    const isActive = index === 0;
+                    if (isActive) {
+                        card.classList.add('active-session');
+                    }
+
+                    const filePath = (session.file || '').replace(/\\/g, '/');
+                    const projectFolder = filePath.split('/').slice(-2, -1)[0] || 'Projeto desconhecido';
+                    const updated = new Date(session.updated_at).toLocaleString('pt-BR');
+
+                    const activeBadge = isActive ? '<span class="active-badge">✨ Atual</span>' : '';
+
+                    card.innerHTML = `
+                        <div class="session-card-header">
+                            <div>
+                                <h3>🗂️ ${projectFolder}</h3>
+                                <p class="session-card-subtitle">${session.file_name}</p>
+                            </div>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                ${activeBadge}
+                                <span class="session-card-badge">${session.message_count} mensagens</span>
+                                <button class="delete-session-btn" data-session-id="${session.session_id}" title="Deletar sessão">🗑️</button>
+                            </div>
+                        </div>
+                        <div class="session-card-meta">
+                            <div>🤖 ${session.model}</div>
+                            <div class="session-card-date">📅 ${updated}</div>
+                        </div>
+                    `;
+
+                    card.onclick = (e) => {
+                        if (e.target.classList.contains('delete-session-btn')) {
+                            return;
+                        }
+                        window.location.href = 'session-viewer.html?session_id=' + session.session_id;
+                    };
+
+                    const deleteBtn = card.querySelector('.delete-session-btn');
+                    deleteBtn.onclick = async (e) => {
+                        e.stopPropagation();
+
+                        try {
+                            const response = await fetch(`http://localhost:8001/sessions/${session.session_id}`, {
+                                method: 'DELETE'
+                            });
+
+                            const result = await response.json();
+
+                            if (result.success) {
+                                console.log('✅', 'Sessão deletada: ' + session.file_name);
+                                card.remove();
+                            } else {
+                                console.error('❌', 'Erro ao deletar: ' + (result.error || 'Falha desconhecida'));
+                            }
+                        } catch (error) {
+                            console.error('❌', 'Erro ao deletar sessão: ' + error.message);
+                        }
+                    };
+
+                    container.appendChild(card);
+                });
+
+            } catch (error) {
+                console.error('Erro:', error);
+                console.error('❌', 'Falha ao carregar: ' + error.message);
+                container.innerHTML = '<p class="empty-state error">❌ Erro ao carregar sessões</p>';
+            }
+        });
+    </script>
+</body>
+</html>
