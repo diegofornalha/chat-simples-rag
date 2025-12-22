@@ -131,13 +131,15 @@ class LRUCache(Generic[T]):
         with self._lock:
             now = datetime.now(timezone.utc)
             size_bytes = self._estimate_size(value)
+            is_update = key in self._cache
 
-            # Se já existe, atualizar
-            if key in self._cache:
+            # Se já existe, remover primeiro para não contar no limite
+            if is_update:
                 old_entry = self._cache[key]
                 self._stats.memory_bytes -= old_entry.size_bytes
+                del self._cache[key]
 
-            # Verificar se precisa evictar
+            # Verificar se precisa evictar (agora não conta a entrada sendo atualizada)
             while len(self._cache) >= self.max_size:
                 self._evict_oldest()
 

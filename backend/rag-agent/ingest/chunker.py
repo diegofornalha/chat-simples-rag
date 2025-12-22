@@ -110,9 +110,15 @@ class Chunker:
                     metadata={"doc_id": doc_id, "strategy": "fixed_size"}
                 ))
                 index += 1
+                # Próximo chunk começa com overlap
+                new_start = end - overlap_chars
+            else:
+                # Chunk muito pequeno - avançar sem overlap para evitar loop infinito
+                new_start = end
 
-            # Próximo chunk começa com overlap
-            start = end - overlap_chars
+            # Garantir que sempre avançamos pelo menos 1 caractere
+            start = max(new_start, start + 1)
+
             if start >= len(text) - self.min_chunk_size * self._chars_per_token:
                 break
 
@@ -295,7 +301,9 @@ class Chunker:
             if not full_text:
                 continue
 
+            section_length = len(full_text)
             tokens = self._estimate_tokens(full_text)
+            section_produced_chunks = False
 
             if tokens > self.chunk_size:
                 # Seção muito grande, subdividir
@@ -307,18 +315,22 @@ class Chunker:
                     sc.metadata["header"] = header
                     chunks.append(sc)
                     index += 1
+                section_produced_chunks = len(sub_chunks) > 0
             elif tokens >= self.min_chunk_size:
                 chunks.append(Chunk(
                     text=full_text,
                     index=index,
                     start_char=char_pos,
-                    end_char=char_pos + len(full_text),
+                    end_char=char_pos + section_length,
                     token_count=tokens,
                     metadata={"doc_id": doc_id, "strategy": "semantic", "header": header}
                 ))
                 index += 1
+                section_produced_chunks = True
 
-            char_pos += len(full_text) + 2  # +2 para \n\n entre seções
+            # Só avançar char_pos se a seção produziu chunks
+            if section_produced_chunks:
+                char_pos += section_length + 2  # +2 para \n\n entre seções
 
         return chunks
 

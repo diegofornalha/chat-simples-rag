@@ -185,8 +185,19 @@ class CircuitBreaker:
                     f"Consecutive failures: {self._stats.consecutive_failures}"
                 )
 
+            # Incrementar ANTES de liberar o lock para evitar race condition
             if self._state == CircuitState.HALF_OPEN:
                 self._half_open_calls += 1
+                # Verificar novamente se excedemos o limite após incremento
+                if self._half_open_calls > self.half_open_max_calls:
+                    self._half_open_calls -= 1
+                    self._record_rejection()
+                    if fallback:
+                        return fallback()
+                    raise CircuitBreakerError(
+                        f"Circuit '{self.name}' is {self._state.value}. "
+                        f"Max half-open calls ({self.half_open_max_calls}) exceeded."
+                    )
 
         try:
             result = func()
