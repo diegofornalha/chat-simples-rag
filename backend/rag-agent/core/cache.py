@@ -295,19 +295,21 @@ class ResponseCache:
     def __init__(self, max_size: int = 1000, ttl: int = 300):  # 5 min default
         self._cache = LRUCache[dict](max_size=max_size, default_ttl=ttl)
 
-    def _make_key(self, query: str, top_k: int) -> str:
-        """Cria chave de cache para query."""
-        content = f"{query}:{top_k}"
+    def _make_key(self, query: str, top_k: int, **kwargs) -> str:
+        """Cria chave de cache para query incluindo parametros extras."""
+        # Incluir parametros extras na chave (ex: use_reranking)
+        extra = ":".join(f"{k}={v}" for k, v in sorted(kwargs.items()))
+        content = f"{query}:{top_k}:{extra}" if extra else f"{query}:{top_k}"
         return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
 
-    def get(self, query: str, top_k: int = 5) -> Optional[dict]:
+    def get(self, query: str, top_k: int = 5, **kwargs) -> Optional[dict]:
         """Obtém resposta do cache."""
-        key = self._make_key(query, top_k)
+        key = self._make_key(query, top_k, **kwargs)
         return self._cache.get(key)
 
-    def set(self, query: str, top_k: int, response: dict) -> None:
+    def set(self, query: str, top_k: int, response: dict, **kwargs) -> None:
         """Armazena resposta no cache."""
-        key = self._make_key(query, top_k)
+        key = self._make_key(query, top_k, **kwargs)
         self._cache.set(key, response)
 
     @property

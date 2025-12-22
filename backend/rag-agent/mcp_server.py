@@ -111,11 +111,10 @@ def search_documents(query: str, top_k: int = 5, use_reranking: bool = True) -> 
                 "threat_level": scan_result.threat_level.value,
             }]
 
-        # Verificar cache de resposta
-        cache_key = f"{query}:{top_k}:{use_reranking}"
-        cached_response = response_cache.get(query, top_k)
+        # Verificar cache de resposta (incluindo use_reranking na chave)
+        cached_response = response_cache.get(query, top_k, use_reranking=use_reranking)
         if cached_response:
-            logger.info("cache_hit", query=query[:50])
+            logger.info("cache_hit", query=query[:50], use_reranking=use_reranking)
             return cached_response
 
         # Usar circuit breaker para operação de DB
@@ -194,8 +193,8 @@ def search_documents(query: str, top_k: int = 5, use_reranking: bool = True) -> 
         logger.log_query(query, top_k, len(results), latency_ms)
         logger.log_retrieval(doc_ids, similarities, latency_ms)
 
-        # Salvar em cache
-        response_cache.set(query, top_k, results)
+        # Salvar em cache (incluindo use_reranking na chave)
+        response_cache.set(query, top_k, results, use_reranking=use_reranking)
 
         return results
 
