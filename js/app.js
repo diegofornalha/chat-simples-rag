@@ -917,7 +917,7 @@ class ClaudeChatApp {
     async startNewChat() {
         // Criar nova sessão no backend
         try {
-            const response = await fetch(`${this.apiBase}/reset`, {
+            const response = await fetch(`${this.apiUrl}/reset`, {
                 method: 'POST',
                 headers: this.getHeaders()
             });
@@ -951,7 +951,7 @@ class ClaudeChatApp {
     async loadCurrentSession() {
         try {
             // Buscar última sessão
-            const response = await fetch(`${this.apiBase}/sessions`);
+            const response = await fetch(`${this.apiUrl}/sessions`);
             const data = await response.json();
 
             if (data.count > 0 && data.sessions.length > 0) {
@@ -959,7 +959,7 @@ class ClaudeChatApp {
                 this.currentSessionId = lastSession.session_id;
 
                 // Carregar mensagens da sessão
-                const sessionResp = await fetch(`${this.apiBase}/sessions/${this.currentSessionId}`);
+                const sessionResp = await fetch(`${this.apiUrl}/sessions/${this.currentSessionId}`);
                 const sessionData = await sessionResp.json();
 
                 if (sessionData.messages && sessionData.messages.length > 0) {
