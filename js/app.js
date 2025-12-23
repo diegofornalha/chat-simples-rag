@@ -303,6 +303,9 @@ class ClaudeChatApp {
                 this.updateStatus('connected');
                 this.sendButton && (this.sendButton.disabled = false);
                 window.debugVisual?.log('success', `Conectado: ${this.apiUrl}`);
+
+                // Carregar sessão atual se existir
+                await this.loadCurrentSession();
             } else {
                 throw new Error('Backend não respondeu');
             }
@@ -911,7 +914,21 @@ class ClaudeChatApp {
         this.scrollToBottom({ force: true, behavior: 'auto' });
     }
 
-    startNewChat() {
+    async startNewChat() {
+        // Criar nova sessão no backend
+        try {
+            const response = await fetch(`${this.apiBase}/reset`, {
+                method: 'POST',
+                headers: this.getHeaders()
+            });
+
+            if (response.ok) {
+                console.log('Nova sessão criada no backend');
+            }
+        } catch (error) {
+            console.log('Erro ao resetar sessão:', error);
+        }
+
         // Limpar todo o localStorage relacionado ao chat
         localStorage.removeItem('claude_chat_history');
         localStorage.removeItem('claude_chat_history_v1');
@@ -929,6 +946,53 @@ class ClaudeChatApp {
 
         // Forçar reload sem cache (hard refresh)
         window.location.reload(true);
+    }
+
+    async loadCurrentSession() {
+        try {
+            // Buscar última sessão
+            const response = await fetch(`${this.apiBase}/sessions`);
+            const data = await response.json();
+
+            if (data.count > 0 && data.sessions.length > 0) {
+                const lastSession = data.sessions[0];
+                this.currentSessionId = lastSession.session_id;
+
+                // Carregar mensagens da sessão
+                const sessionResp = await fetch(`${this.apiBase}/sessions/${this.currentSessionId}`);
+                const sessionData = await sessionResp.json();
+
+                if (sessionData.messages && sessionData.messages.length > 0) {
+                    this.renderHistoryMessages(sessionData.messages);
+                }
+            }
+        } catch (error) {
+            console.log('Nenhuma sessão anterior encontrada:', error);
+        }
+    }
+
+    renderHistoryMessages(messages) {
+        // Filtrar apenas mensagens de usuário e assistente
+        const chatMessages = messages.filter(msg =>
+            msg.type === 'user' || msg.type === 'assistant'
+        );
+
+        chatMessages.forEach(msg => {
+            if (msg.type === 'user' && msg.message?.content) {
+                this.addUserMessage(msg.message.content);
+            } else if (msg.type === 'assistant' && msg.message?.content) {
+                // Extrair texto das respostas
+                const content = Array.isArray(msg.message.content)
+                    ? msg.message.content.find(c => c.type === 'text')?.text
+                    : msg.message.content;
+
+                if (content) {
+                    this.addAssistantMessage({content});
+                }
+            }
+        });
+
+        this.scrollToBottom();
     }
 
     showTypingIndicator() {
