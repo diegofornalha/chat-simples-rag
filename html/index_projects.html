@@ -43,6 +43,23 @@
             const container = document.getElementById('sessions-list');
 
             try {
+                // Obter API key do servidor se não estiver no localStorage
+                let apiKey = localStorage.getItem('chat_api_key') || '';
+                if (!apiKey) {
+                    try {
+                        const keyResponse = await fetch('http://localhost:8001/');
+                        if (keyResponse.ok) {
+                            const keyData = await keyResponse.json();
+                            if (keyData.dev_key) {
+                                apiKey = keyData.dev_key;
+                                localStorage.setItem('chat_api_key', apiKey);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('⚠️', 'Não foi possível obter API key do servidor');
+                    }
+                }
+
                 const response = await fetch('http://localhost:8001/sessions');
                 const data = await response.json();
 
@@ -102,8 +119,19 @@
                         e.stopPropagation();
 
                         try {
+                            // Obter API key do localStorage (já foi carregada no load)
+                            const apiKey = localStorage.getItem('chat_api_key') || '';
+                            
+                            if (!apiKey) {
+                                console.error('❌', 'API key não encontrada. Recarregue a página.');
+                                return;
+                            }
+                            
                             const response = await fetch(`http://localhost:8001/sessions/${session.session_id}`, {
-                                method: 'DELETE'
+                                method: 'DELETE',
+                                headers: {
+                                    'X-API-Key': apiKey
+                                }
                             });
 
                             const result = await response.json();
