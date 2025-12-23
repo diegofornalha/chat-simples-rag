@@ -23,16 +23,21 @@ from core.cache import get_embedding_cache, get_response_cache
 from core.circuit_breaker import get_or_create_circuit_breaker, CircuitBreakerError
 from core.prompt_guard import get_prompt_guard, ThreatLevel
 from core.reranker import LightweightReranker
+from core.config import get_config
+from core.adaptive_search import apply_adaptive_topk
 from api.metrics import get_metrics
 
+# Carregar configuração
+config = get_config()
+
 # Caminho do banco de dados
-DB_PATH = Path(__file__).parent.parent / "teste" / "documentos.db"
+DB_PATH = config.db_path
 
 # Inicializar MCP Server
 mcp = FastMCP("rag-tools")
 
-# Modelo de embeddings (mesmo usado na indexacao)
-model = TextEmbedding("BAAI/bge-small-en-v1.5")
+# Modelo de embeddings (carregado da config)
+model = TextEmbedding(config.embedding_model.value)
 
 # Coletor de métricas
 metrics = get_metrics()
@@ -80,7 +85,7 @@ def get_embedding_cached(text: str) -> list[float]:
 
 
 @mcp.tool()
-def search_documents(query: str, top_k: int = 5, use_reranking: bool = True) -> list:
+def search_documents(query: str, top_k: int = 5, use_reranking: bool = True, use_adaptive: bool = True) -> list:
     """
     Busca semantica nos documentos indexados.
 
@@ -88,6 +93,7 @@ def search_documents(query: str, top_k: int = 5, use_reranking: bool = True) -> 
         query: Pergunta ou texto para buscar
         top_k: Numero de resultados (padrao 5)
         use_reranking: Aplicar re-ranking para melhor precisao (padrao True)
+        use_adaptive: Usar top-k adaptativo baseado em confidence (padrao True)
 
     Returns:
         Lista de documentos relevantes com source, content e score
@@ -158,13 +164,44 @@ def search_documents(query: str, top_k: int = 5, use_reranking: bool = True) -> 
             metrics.record_error("CircuitBreakerOpen")
             return [{"error": "Service temporarily unavailable", "retry_after": 30}]
 
+        # Aplicar top-k adaptativo ANTES do reranking
+        if use_adaptive and len(results) > 0:
+            # Criar objetos mock com similarity para adaptive
+            from dataclasses import dataclass
+            @dataclass
+            class MockResult:
+                similarity: float
+
+            mock_results = [MockResult(similarity=r["similarity"]) for r in results]
+            _, adaptive_decision = apply_adaptive_topk(mock_results, top_k, enabled=True)
+
+            # Ajustar fetch_k baseado na decisão adaptativa
+            adaptive_k = adaptive_decision.adjusted_k
+
+            # Log da decisão
+            logger.info(
+                "adaptive_topk_decision",
+                original_k=top_k,
+                adjusted_k=adaptive_k,
+                reason=adaptive_decision.reason,
+                confidence=adaptive_decision.confidence_level,
+                top_similarity=adaptive_decision.top_similarity,
+            )
+
+            # Aplicar o ajuste
+            results = results[:adaptive_k]
+        else:
+            adaptive_k = top_k
+            results = results[:top_k]
+
         # Aplicar re-ranking se habilitado
         if use_reranking and len(results) > 0:
             docs_for_rerank = [
                 (r["doc_id"], r["content"], r["similarity"], {"source": r["source"], "type": r["type"]})
                 for r in results
             ]
-            reranked = reranker.rerank(query, docs_for_rerank, top_k=top_k)
+            # Usar adaptive_k como limite do reranking
+            reranked = reranker.rerank(query, docs_for_rerank, top_k=adaptive_k)
 
             results = [
                 {
@@ -178,8 +215,6 @@ def search_documents(query: str, top_k: int = 5, use_reranking: bool = True) -> 
                 }
                 for r in reranked
             ]
-        else:
-            results = results[:top_k]
 
         # Calcular latencia
         latency_ms = (time.perf_counter() - start_time) * 1000
@@ -447,6 +482,52 @@ def get_health() -> dict:
             for c in report.components
         ],
     }
+
+
+@mcp.tool()
+def get_config_info() -> dict:
+    """
+    Retorna configuração atual do sistema RAG.
+
+    Returns:
+        Configuração completa incluindo modelo, chunking e parâmetros
+    """
+    return config.to_dict()
+
+
+@mcp.tool()
+def clear_cache(cache_type: str = "all") -> dict:
+    """
+    Limpa cache de embeddings ou respostas.
+
+    Args:
+        cache_type: Tipo de cache ("embedding", "response", ou "all")
+
+    Returns:
+        Estatisticas de limpeza
+    """
+    result = {"cleared": []}
+
+    if cache_type in ("embedding", "all"):
+        emb_stats_before = embedding_cache.stats
+        embedding_cache.clear()
+        result["cleared"].append({
+            "type": "embedding",
+            "entries_cleared": emb_stats_before.size,
+            "memory_freed_mb": round(emb_stats_before.memory_bytes / 1024 / 1024, 2),
+        })
+
+    if cache_type in ("response", "all"):
+        resp_stats_before = response_cache.stats
+        response_cache.clear()
+        result["cleared"].append({
+            "type": "response",
+            "entries_cleared": resp_stats_before.size,
+            "memory_freed_mb": round(resp_stats_before.memory_bytes / 1024 / 1024, 2),
+        })
+
+    result["status"] = "success"
+    return result
 
 
 if __name__ == "__main__":
