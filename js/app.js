@@ -50,12 +50,64 @@ function sanitizeHtml(html) {
 function renderMarkdownSafe(text) {
     if (!text) return '';
 
+    // Detectar e renderizar JSON do RAG Agent
+    const jsonMatch = text.match(/json\s*({[\s\S]*})/);
+    if (jsonMatch) {
+        try {
+            const jsonData = JSON.parse(jsonMatch[1]);
+            if (jsonData.answer && jsonData.citations) {
+                return renderRAGResponse(jsonData);
+            }
+        } catch (e) {
+            // Se parsing falhar, continua com markdown normal
+        }
+    }
+
     if (window.marked) {
         const raw = marked.parse(text);
         return sanitizeHtml(raw);
     }
 
     return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
+function renderRAGResponse(data) {
+    let html = '<div class="rag-response">';
+
+    // Answer
+    html += '<div class="rag-answer">';
+    html += escapeHtml(data.answer).replace(/\n\n/g, '</p><p>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html += '</div>';
+
+    // Citations
+    if (data.citations && data.citations.length > 0) {
+        html += '<div class="rag-citations">';
+        html += '<h4>📚 Citações:</h4>';
+        data.citations.forEach((cite, idx) => {
+            html += `<div class="citation">`;
+            html += `<div class="citation-source"><strong>${idx + 1}. ${escapeHtml(cite.source)}</strong></div>`;
+            html += `<div class="citation-quote">"${escapeHtml(cite.quote)}"</div>`;
+            html += `</div>`;
+        });
+        html += '</div>';
+    }
+
+    // Confidence
+    if (typeof data.confidence === 'number') {
+        const percentage = Math.round(data.confidence * 100);
+        const color = percentage >= 80 ? '#4caf50' : percentage >= 60 ? '#ff9800' : '#f44336';
+        html += `<div class="rag-confidence" style="color: ${color}">`;
+        html += `<strong>Confiança:</strong> ${percentage}%`;
+        html += '</div>';
+    }
+
+    // Notes
+    if (data.notes) {
+        html += `<div class="rag-notes"><em>${escapeHtml(data.notes)}</em></div>`;
+    }
+
+    html += '</div>';
+    return html;
 }
 
 function truncateText(text, maxLength = 160) {
