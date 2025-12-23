@@ -220,6 +220,7 @@ class ClaudeChatApp {
         // Usando REST API em vez de WebSocket
         this.apiUrl = 'http://localhost:8001';
         this.useRestApi = true;
+        this.apiKey = localStorage.getItem('chat_api_key') || '';
 
         // Verificar conexão com o backend
         this.checkConnection();
@@ -231,6 +232,15 @@ class ClaudeChatApp {
         try {
             const response = await fetch(`${this.apiUrl}/`);
             if (response.ok) {
+                const data = await response.json();
+
+                // Buscar dev_key se disponível
+                if (data.dev_key) {
+                    this.apiKey = data.dev_key;
+                    localStorage.setItem('chat_api_key', data.dev_key);
+                    window.debugVisual?.log('info', 'API Key obtida do servidor');
+                }
+
                 this.hasConnectedOnce = true;
                 this.reconnectAttempts = 0;
                 this.updateStatus('connected');
@@ -350,7 +360,8 @@ class ClaudeChatApp {
             const response = await fetch(`${this.apiUrl}/chat`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'X-API-Key': this.apiKey || ''
                 },
                 body: JSON.stringify({ message }),
                 signal: currentAbortController.signal
