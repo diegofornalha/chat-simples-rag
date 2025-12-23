@@ -74,9 +74,14 @@ function renderMarkdownSafe(text) {
 function renderRAGResponse(data) {
     let html = '<div class="rag-response">';
 
-    // Answer
+    // Answer - processar markdown se window.marked disponível
     html += '<div class="rag-answer">';
-    html += escapeHtml(data.answer).replace(/\n\n/g, '</p><p>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    if (window.marked && data.answer) {
+        const parsedAnswer = marked.parse(data.answer);
+        html += sanitizeHtml(parsedAnswer);
+    } else {
+        html += escapeHtml(data.answer).replace(/\n\n/g, '</p><p>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    }
     html += '</div>';
 
     // Citations
