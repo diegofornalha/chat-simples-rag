@@ -25,7 +25,7 @@ from core.rate_limiter import get_limiter, RATE_LIMITS, get_client_ip, SLOWAPI_A
 from core.prompt_guard import validate_prompt
 from core.auth import verify_api_key, is_auth_enabled
 
-SESSIONS_DIR = Path.home() / ".claude" / "projects" / "-Users-2a--claude-hello-agent-chat-simples-backend"
+SESSIONS_DIR = Path.home() / ".claude" / "projects" / "-Users-2a--claude-hello-agent-chat-simples-backend-rag-agent"
 
 client: ClaudeSDKClient | None = None
 
