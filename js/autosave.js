@@ -68,6 +68,15 @@ class AutosaveSystem {
 
     loadSavedConversations() {
         try {
+            // Verificar se deve pular carregamento (novo chat foi iniciado)
+            const skipLoad = localStorage.getItem('skip_load_session');
+            if (skipLoad === 'true') {
+                // Limpar conversa salva quando novo chat é iniciado
+                localStorage.removeItem(this.storageKey);
+                console.log('⏭️ Pulando carregamento de conversa salva (novo chat iniciado)');
+                return;
+            }
+            
             const saved = localStorage.getItem(this.storageKey);
             if (!saved) return;
 
