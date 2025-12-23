@@ -172,7 +172,7 @@ class ClaudeChatApp {
         this.setupTheme();
         this.attachEvents();
         this.autoResizeInput();
-        this.restoreHistory();
+        // this.restoreHistory(); // DESABILITADO: usando loadCurrentSession() do backend
         this.connectWebSocket();
     }
 
@@ -304,8 +304,9 @@ class ClaudeChatApp {
                 this.sendButton && (this.sendButton.disabled = false);
                 window.debugVisual?.log('success', `Conectado: ${this.apiUrl}`);
 
-                // Carregar sessão atual se existir
-                await this.loadCurrentSession();
+                // Carregar sessão atual se existir (apenas se não for novo chat)
+                // Desabilitado por padrão - tela inicial sempre em branco
+                // await this.loadCurrentSession();
             } else {
                 throw new Error('Backend não respondeu');
             }
@@ -885,6 +886,14 @@ class ClaudeChatApp {
     }
 
     restoreHistory() {
+        // Verificar se deve pular carregamento (novo chat foi iniciado)
+        const skipLoad = localStorage.getItem('skip_load_session');
+        if (skipLoad === 'true') {
+            // Flag será removida em loadCurrentSession(), mas não carregar histórico aqui
+            this.updateMessageCount();
+            return;
+        }
+        
         const saved = this.loadLocalHistory();
         if (!saved || !saved.messages.length) {
             this.updateMessageCount();
@@ -915,7 +924,25 @@ class ClaudeChatApp {
     }
 
     async startNewChat() {
-        // Criar nova sessão no backend
+        // 1. Limpar interface visual IMEDIATAMENTE
+        if (this.messagesContainer) {
+            this.messagesContainer.innerHTML = '';
+        }
+        
+        // 2. Limpar estado interno
+        this.localHistory = [];
+        this.messageCount = 0;
+        this.conversationId = null;
+        this.localConversationId = null;
+        this.currentSessionId = null;
+        this.currentMessage = null;
+        this.currentMessageContent = null;
+        this.updateMessageCount();
+        
+        // 3. Esconder indicador de digitação se estiver visível
+        this.hideTypingIndicator();
+        
+        // 4. Criar nova sessão no backend
         try {
             const response = await fetch(`${this.apiUrl}/reset`, {
                 method: 'POST',
@@ -923,32 +950,44 @@ class ClaudeChatApp {
             });
 
             if (response.ok) {
-                console.log('Nova sessão criada no backend');
+                console.log('✅ Nova sessão criada no backend');
             }
         } catch (error) {
-            console.log('Erro ao resetar sessão:', error);
+            console.log('⚠️ Erro ao resetar sessão:', error);
         }
 
-        // Limpar todo o localStorage relacionado ao chat
+        // 5. Limpar todo o localStorage relacionado ao chat
         localStorage.removeItem('claude_chat_history');
         localStorage.removeItem('claude_chat_history_v1');
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem('claude_chat_conversations'); // Limpar autosave também
+        
+        // 6. Adicionar flag para não carregar sessão após reload
+        localStorage.setItem('skip_load_session', 'true');
 
-        // Limpar sessionStorage também
+        // 7. Limpar sessionStorage também
         sessionStorage.clear();
 
-        // Limpar cache do Service Worker (se existir)
+        // 8. Limpar cache do Service Worker (se existir)
         if ('caches' in window) {
             caches.keys().then(names => {
                 names.forEach(name => caches.delete(name));
             });
         }
 
-        // Forçar reload sem cache (hard refresh)
+        // 9. Forçar reload sem cache (hard refresh)
         window.location.reload(true);
     }
 
     async loadCurrentSession() {
+        // Verificar se deve pular carregamento (novo chat foi iniciado)
+        const skipLoad = localStorage.getItem('skip_load_session');
+        if (skipLoad === 'true') {
+            localStorage.removeItem('skip_load_session');
+            console.log('⏭️ Pulando carregamento de sessão (novo chat iniciado)');
+            return;
+        }
+        
         try {
             // Buscar última sessão
             const response = await fetch(`${this.apiUrl}/sessions`);
@@ -979,7 +1018,9 @@ class ClaudeChatApp {
 
         chatMessages.forEach(msg => {
             if (msg.type === 'user' && msg.message?.content) {
-                this.addUserMessage(msg.message.content);
+                // Renderizar sem salvar (histórico já está salvo no backend)
+                const messageDiv = this.createMessageElement('user', msg.message.content, new Date(msg.timestamp));
+                this.messagesContainer?.appendChild(messageDiv);
             } else if (msg.type === 'assistant' && msg.message?.content) {
                 // Extrair texto das respostas
                 const content = Array.isArray(msg.message.content)
@@ -987,7 +1028,9 @@ class ClaudeChatApp {
                     : msg.message.content;
 
                 if (content) {
-                    this.addAssistantMessage({content});
+                    const { messageDiv, contentDiv } = this.buildMessageElement('assistant', new Date(msg.timestamp));
+                    contentDiv.innerHTML = renderMarkdownSafe(content);
+                    this.messagesContainer?.appendChild(messageDiv);
                 }
             }
         });
