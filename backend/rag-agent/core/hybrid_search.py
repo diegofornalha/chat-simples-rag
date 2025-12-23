@@ -12,6 +12,12 @@ from typing import Optional
 import apsw
 import sqlite_vec
 from fastembed import TextEmbedding
+from pathlib import Path
+import sys
+
+# Adicionar parent ao path para importar config
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.config import get_config
 
 
 @dataclass
@@ -140,8 +146,9 @@ class HybridSearch:
         self.vector_weight = vector_weight
         self.bm25_weight = bm25_weight
 
-        # Inicializar modelo de embeddings
-        self.model = TextEmbedding("BAAI/bge-small-en-v1.5")
+        # Carregar configuração e modelo de embeddings
+        config = get_config()
+        self.model = TextEmbedding(config.embedding_model.value)
 
         # Inicializar BM25
         self.bm25 = BM25()

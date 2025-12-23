@@ -153,12 +153,20 @@ class HealthChecker:
                     message=f"Unexpected embedding dimension: {len(embeddings[0])}",
                 )
 
+            # Importar config para pegar modelo atual
+            from core.config import get_config
+            config = get_config()
+
             return ComponentHealth(
                 name="embedding_model",
                 status=HealthStatus.HEALTHY,
                 latency_ms=latency,
                 message="OK",
-                details={"model": "BAAI/bge-small-en-v1.5", "dimensions": 384},
+                details={
+                    "model": config.embedding_model.value,
+                    "short_name": config.embedding_model.short_name,
+                    "dimensions": config.embedding_dimensions,
+                },
             )
 
         except Exception as e:

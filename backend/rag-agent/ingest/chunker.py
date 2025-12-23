@@ -349,6 +349,12 @@ def reindex_documents(db_path: str, chunker: Chunker) -> dict:
     import apsw
     import sqlite_vec
     from fastembed import TextEmbedding
+    import sys
+    from pathlib import Path
+
+    # Importar config
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from core.config import get_config
 
     conn = apsw.Connection(db_path)
     conn.enableloadextension(True)
@@ -356,8 +362,9 @@ def reindex_documents(db_path: str, chunker: Chunker) -> dict:
     conn.enableloadextension(False)
     cursor = conn.cursor()
 
-    # Carregar modelo de embeddings
-    model = TextEmbedding("BAAI/bge-small-en-v1.5")
+    # Carregar modelo de embeddings da config
+    config = get_config()
+    model = TextEmbedding(config.embedding_model.value)
 
     stats = {"docs_processed": 0, "chunks_created": 0, "embeddings_created": 0}
 
