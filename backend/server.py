@@ -7,11 +7,16 @@ from pathlib import Path
 import json
 import os
 import sys
+import importlib.util
 
 from claude_agent_sdk import ClaudeSDKClient, AssistantMessage, TextBlock, ProcessError
 
-# Importa configuracao do agente
-from config import HELLO_AGENT_OPTIONS
+# Importa config do RAG Agent
+rag_config_path = Path(__file__).parent / "rag-agent" / "config.py"
+spec = importlib.util.spec_from_file_location("rag_config", rag_config_path)
+rag_config = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rag_config)
+RAG_AGENT_OPTIONS = rag_config.RAG_AGENT_OPTIONS
 
 # Importa modulos de seguranca
 sys.path.insert(0, str(Path(__file__).parent))
@@ -28,7 +33,7 @@ async def get_client() -> ClaudeSDKClient:
     """Retorna o cliente, criando se necessário."""
     global client
     if client is None:
-        client = ClaudeSDKClient(options=HELLO_AGENT_OPTIONS)
+        client = ClaudeSDKClient(options=RAG_AGENT_OPTIONS)
         await client.__aenter__()
         print("🔗 Nova sessão criada!")
     return client
@@ -88,11 +93,19 @@ class ChatResponse(BaseModel):
 async def root():
     """Health check."""
     global client
-    return {
+    env = os.getenv("ENVIRONMENT", "development")
+    response = {
         "status": "ok",
         "session_active": client is not None,
-        "message": "Chat Simples v2 - Sessão Persistente"
+        "message": "Chat Simples v2 - Sessão Persistente",
+        "auth_enabled": is_auth_enabled()
     }
+    # Em dev, expor a API key
+    if env != "production" and is_auth_enabled():
+        from core.auth import VALID_API_KEYS
+        if VALID_API_KEYS:
+            response["dev_key"] = list(VALID_API_KEYS)[0]
+    return response
 
 @app.get("/health")
 async def health_check():
