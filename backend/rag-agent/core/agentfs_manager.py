@@ -10,8 +10,8 @@ import sys
 from typing import Optional
 from pathlib import Path
 
-# Adicionar caminho do SDK do AgentFS
-agentfs_sdk_path = Path(__file__).parent.parent / "agentfs" / "sdk" / "python"
+# Adicionar caminho do SDK do AgentFS (submodule em backend/agentfs/)
+agentfs_sdk_path = Path(__file__).parent.parent.parent / "agentfs" / "sdk" / "python"
 sys.path.insert(0, str(agentfs_sdk_path))
 
 from agentfs_sdk import AgentFS, AgentFSOptions
