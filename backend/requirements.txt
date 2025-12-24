@@ -11,3 +11,7 @@ fastmcp>=0.1.0
 
 # Seguranca (Semana 1)
 slowapi>=0.1.9            # Rate limiting
+
+# AgentFS SDK - Filesystem para agentes com auditoria
+agentfs-sdk>=0.4.0
+pyturso>=0.4.0

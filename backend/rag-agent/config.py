@@ -79,12 +79,26 @@ CRITERIOS DE CONFIANCA:
 
 Sempre use search_documents antes de responder qualquer pergunta.""",
 
-    # Ferramentas permitidas - apenas MCP tools do RAG
+    # Ferramentas permitidas - MCP tools do RAG + AgentFS
     allowed_tools=[
+        # RAG tools
         "mcp__rag-tools__search_documents",
         "mcp__rag-tools__get_document",
         "mcp__rag-tools__list_sources",
         "mcp__rag-tools__count_documents",
+
+        # AgentFS Filesystem tools
+        "mcp__rag-tools__create_file",
+        "mcp__rag-tools__read_file",
+        "mcp__rag-tools__list_files",
+        "mcp__rag-tools__delete_file",
+        "mcp__rag-tools__get_file_info",
+
+        # AgentFS KV Store tools (State Management)
+        "mcp__rag-tools__set_state",
+        "mcp__rag-tools__get_state",
+        "mcp__rag-tools__delete_state",
+        "mcp__rag-tools__list_states",
     ],
 
     # Modo de permissao - bypass para criar arquivos sem pedir

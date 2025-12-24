@@ -25,6 +25,7 @@ from core.prompt_guard import get_prompt_guard, ThreatLevel
 from core.reranker import LightweightReranker
 from core.config import get_config
 from core.adaptive_search import apply_adaptive_topk
+from core.sync_audit import audit_sync_tool, get_audit_queue
 from api.metrics import get_metrics
 
 # Carregar configuração
@@ -85,6 +86,7 @@ def get_embedding_cached(text: str) -> list[float]:
 
 
 @mcp.tool()
+@audit_sync_tool("search_documents")
 def search_documents(query: str, top_k: int = 5, use_reranking: bool = True, use_adaptive: bool = True) -> list:
     """
     Busca semantica nos documentos indexados.
@@ -241,6 +243,7 @@ def search_documents(query: str, top_k: int = 5, use_reranking: bool = True, use
 
 
 @mcp.tool()
+@audit_sync_tool("search_hybrid")
 def search_hybrid(query: str, top_k: int = 5, vector_weight: float = 0.7) -> list:
     """
     Busca hibrida combinando BM25 (lexica) e vetorial.
@@ -304,6 +307,7 @@ def search_hybrid(query: str, top_k: int = 5, vector_weight: float = 0.7) -> lis
 
 
 @mcp.tool()
+@audit_sync_tool("get_document")
 def get_document(doc_id: int) -> dict:
     """
     Recupera documento completo pelo ID.
@@ -349,6 +353,7 @@ def get_document(doc_id: int) -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("list_sources")
 def list_sources() -> list:
     """
     Lista todas as fontes/documentos disponiveis no banco.
@@ -379,6 +384,7 @@ def list_sources() -> list:
 
 
 @mcp.tool()
+@audit_sync_tool("count_documents")
 def count_documents() -> dict:
     """
     Conta documentos e embeddings no banco.
@@ -413,6 +419,7 @@ def count_documents() -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("get_metrics_summary")
 def get_metrics_summary() -> dict:
     """
     Retorna metricas do sistema RAG.
@@ -458,6 +465,7 @@ def get_metrics_summary() -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("get_health")
 def get_health() -> dict:
     """
     Retorna status de saude do sistema.
@@ -485,6 +493,7 @@ def get_health() -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("get_config_info")
 def get_config_info() -> dict:
     """
     Retorna configuração atual do sistema RAG.
@@ -496,6 +505,7 @@ def get_config_info() -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("clear_cache")
 def clear_cache(cache_type: str = "all") -> dict:
     """
     Limpa cache de embeddings ou respostas.
@@ -528,6 +538,313 @@ def clear_cache(cache_type: str = "all") -> dict:
 
     result["status"] = "success"
     return result
+
+
+# =============================================================================
+# AGENTFS FILESYSTEM TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def create_file(path: str, content: str) -> dict:
+    """
+    Cria arquivo no filesystem do agent (AgentFS + local).
+
+    Args:
+        path: Nome do arquivo (ex: "resumo.txt")
+        content: Conteúdo do arquivo
+
+    Returns:
+        Informações sobre o arquivo criado
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+        from pathlib import Path
+
+        agentfs = get_agentfs()
+
+        # 1. Escreve em AgentFS (SQLite)
+        await agentfs.fs.write_file(f"/{path}", content.encode('utf-8'))
+
+        # 2. Escreve em local (backward compatibility)
+        local_path = Path.cwd() / path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_text(content, encoding='utf-8')
+
+        logger.info("Arquivo criado", path=path, size=len(content))
+
+        return {
+            "success": True,
+            "path": path,
+            "size": len(content),
+            "storage": "agentfs+local"
+        }
+    except Exception as e:
+        logger.error(f"Erro ao criar arquivo: {e}", path=path, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def read_file(path: str) -> dict:
+    """
+    Lê arquivo do filesystem do agent.
+
+    Args:
+        path: Nome do arquivo
+
+    Returns:
+        Conteúdo do arquivo
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        content_bytes = await agentfs.fs.read_file(f"/{path}")
+        content = content_bytes.decode('utf-8')
+
+        logger.info("Arquivo lido", path=path, size=len(content))
+
+        return {
+            "success": True,
+            "path": path,
+            "content": content,
+            "size": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Erro ao ler arquivo: {e}", path=path, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def list_files(directory: str = "/") -> dict:
+    """
+    Lista arquivos no filesystem do agent.
+
+    Args:
+        directory: Diretório a listar (padrão: raiz)
+
+    Returns:
+        Lista de arquivos e diretórios
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        entries = await agentfs.fs.readdir(directory)
+
+        files = []
+        for entry in entries:
+            entry_path = f"{directory.rstrip('/')}/{entry}"
+            stats = await agentfs.fs.stat(entry_path)
+            files.append({
+                "name": entry,
+                "size": stats.size,
+                "is_dir": stats.is_directory(),
+                "modified": stats.mtime
+            })
+
+        logger.info("Diretório listado", directory=directory, count=len(files))
+
+        return {
+            "success": True,
+            "directory": directory,
+            "files": files,
+            "count": len(files)
+        }
+    except Exception as e:
+        logger.error(f"Erro ao listar diretório: {e}", directory=directory, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def delete_file(path: str) -> dict:
+    """
+    Remove arquivo do filesystem.
+
+    Args:
+        path: Nome do arquivo
+
+    Returns:
+        Status da operação
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+        from pathlib import Path
+
+        agentfs = get_agentfs()
+
+        # Remove do AgentFS
+        await agentfs.fs.delete_file(f"/{path}")
+
+        # Remove do local (backward compatibility)
+        local_path = Path.cwd() / path
+        if local_path.exists():
+            local_path.unlink()
+
+        logger.info("Arquivo deletado", path=path)
+
+        return {"success": True, "path": path}
+    except Exception as e:
+        logger.error(f"Erro ao deletar arquivo: {e}", path=path, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def get_file_info(path: str) -> dict:
+    """
+    Obtém informações sobre um arquivo.
+
+    Args:
+        path: Nome do arquivo
+
+    Returns:
+        Metadados do arquivo
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        stats = await agentfs.fs.stat(f"/{path}")
+
+        logger.info("Info do arquivo obtida", path=path)
+
+        return {
+            "success": True,
+            "path": path,
+            "size": stats.size,
+            "is_dir": stats.is_directory(),
+            "created_at": stats.ctime,
+            "modified_at": stats.mtime
+        }
+    except Exception as e:
+        logger.error(f"Erro ao obter info do arquivo: {e}", path=path, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# AGENTFS KV STORE TOOLS - State Management
+# =============================================================================
+
+@mcp.tool()
+async def set_state(key: str, value: str) -> dict:
+    """
+    Salva um estado/valor no KV Store do agent.
+
+    Args:
+        key: Chave única para o estado (ex: "user_preferences", "last_search")
+        value: Valor a salvar (string, JSON será serializado)
+
+    Returns:
+        Confirmação do salvamento
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        await agentfs.kv.set(key, value)
+
+        logger.info("Estado salvo", key=key, size=len(value))
+
+        return {
+            "success": True,
+            "key": key,
+            "size": len(value),
+            "storage": "agentfs_kv"
+        }
+    except Exception as e:
+        logger.error(f"Erro ao salvar estado: {e}", key=key, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def get_state(key: str) -> dict:
+    """
+    Recupera um estado/valor do KV Store.
+
+    Args:
+        key: Chave do estado
+
+    Returns:
+        Valor armazenado ou erro se não existir
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        value = await agentfs.kv.get(key)
+
+        if value is None:
+            return {
+                "success": False,
+                "key": key,
+                "error": "Key not found"
+            }
+
+        logger.info("Estado recuperado", key=key)
+
+        return {
+            "success": True,
+            "key": key,
+            "value": value,
+            "size": len(value) if value else 0
+        }
+    except Exception as e:
+        logger.error(f"Erro ao recuperar estado: {e}", key=key, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def delete_state(key: str) -> dict:
+    """
+    Remove um estado do KV Store.
+
+    Args:
+        key: Chave do estado a remover
+
+    Returns:
+        Confirmação da remoção
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        await agentfs.kv.delete(key)
+
+        logger.info("Estado removido", key=key)
+
+        return {"success": True, "key": key}
+    except Exception as e:
+        logger.error(f"Erro ao remover estado: {e}", key=key, error=str(e))
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def list_states(prefix: str = "") -> dict:
+    """
+    Lista todas as chaves no KV Store.
+
+    Args:
+        prefix: Prefixo opcional para filtrar chaves (ex: "user_" lista apenas chaves que começam com "user_")
+
+    Returns:
+        Lista de chaves disponíveis
+    """
+    try:
+        from core.agentfs_manager import get_agentfs
+
+        agentfs = get_agentfs()
+        keys = await agentfs.kv.list(prefix=prefix if prefix else None)
+
+        logger.info("Estados listados", prefix=prefix, count=len(keys))
+
+        return {
+            "success": True,
+            "prefix": prefix or "(all)",
+            "keys": keys,
+            "count": len(keys)
+        }
+    except Exception as e:
+        logger.error(f"Erro ao listar estados: {e}", prefix=prefix, error=str(e))
+        return {"success": False, "error": str(e)}
 
 
 if __name__ == "__main__":

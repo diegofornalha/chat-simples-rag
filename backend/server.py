@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -100,6 +100,13 @@ async def get_client() -> ClaudeSDKClient:
             from core.agentfs_manager import init_agentfs
             await init_agentfs(session_id)
             print(f"🗄️  AgentFS inicializado: ~/.claude/.agentfs/{session_id}.db")
+
+            # Definir variável de ambiente para MCP server usar auditoria
+            os.environ["AGENTFS_SESSION_ID"] = session_id
+
+            # Escrever session_id em arquivo compartilhado para subprocessos
+            session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+            session_file.write_text(session_id)
 
         except Exception as e:
             # Cleanup em caso de erro durante inicialização
@@ -541,6 +548,173 @@ async def delete_output(filename: str, api_key: str = Depends(verify_api_key)):
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+# =============================================================================
+# ENDPOINTS DE AUDITORIA - Tool Calls
+# =============================================================================
+
+AUDIT_DIR = Path.home() / ".claude" / ".agentfs" / "audit"
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _get_current_session_id() -> str:
+    """Obtém session_id do arquivo compartilhado."""
+    session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+    if session_file.exists():
+        try:
+            return session_file.read_text().strip()
+        except:
+            pass
+    return get_session_id()  # Fallback para logger
+
+
+@app.get("/audit/tools")
+async def get_audit_tools(limit: int = 100):
+    """
+    Retorna histórico de tool calls da sessão atual.
+
+    Args:
+        limit: Número máximo de registros (padrão 100)
+    """
+    session_id = _get_current_session_id()
+
+    if not session_id or session_id == "default":
+        return {"error": "Nenhuma sessão ativa", "records": []}
+
+    audit_file = AUDIT_DIR / f"{session_id}.jsonl"
+
+    if not audit_file.exists():
+        return {
+            "session_id": session_id,
+            "records": [],
+            "count": 0,
+            "message": "Nenhum registro de auditoria ainda"
+        }
+
+    records = []
+    try:
+        with open(audit_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+
+        # Limitar e ordenar por mais recente
+        records = records[-limit:]
+        records.reverse()
+
+        return {
+            "session_id": session_id,
+            "records": records,
+            "count": len(records)
+        }
+    except Exception as e:
+        return {"error": str(e), "session_id": session_id}
+
+
+@app.get("/audit/stats")
+async def get_audit_stats():
+    """Retorna estatísticas de auditoria da sessão atual."""
+    session_id = _get_current_session_id()
+
+    if not session_id or session_id == "default":
+        return {"error": "Nenhuma sessão ativa"}
+
+    audit_file = AUDIT_DIR / f"{session_id}.jsonl"
+
+    if not audit_file.exists():
+        return {
+            "session_id": session_id,
+            "total_calls": 0,
+            "by_tool": {},
+            "errors": 0,
+            "avg_duration_ms": 0
+        }
+
+    try:
+        records = []
+        with open(audit_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+
+        if not records:
+            return {
+                "session_id": session_id,
+                "total_calls": 0,
+                "by_tool": {},
+                "errors": 0,
+                "avg_duration_ms": 0
+            }
+
+        by_tool = {}
+        total_duration = 0
+        errors = 0
+
+        for r in records:
+            tool = r.get("tool_name", "unknown")
+            by_tool[tool] = by_tool.get(tool, 0) + 1
+            total_duration += r.get("duration_ms", 0)
+            if r.get("error"):
+                errors += 1
+
+        return {
+            "session_id": session_id,
+            "total_calls": len(records),
+            "by_tool": by_tool,
+            "errors": errors,
+            "avg_duration_ms": round(total_duration / len(records), 2),
+            "first_call": records[0].get("started_at") if records else None,
+            "last_call": records[-1].get("completed_at") if records else None
+        }
+    except Exception as e:
+        return {"error": str(e), "session_id": session_id}
+
+
+@app.get("/audit/sessions")
+async def list_audit_sessions():
+    """Lista todas as sessões com dados de auditoria."""
+    if not AUDIT_DIR.exists():
+        return {"sessions": [], "count": 0}
+
+    sessions = []
+    for file in sorted(AUDIT_DIR.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True):
+        try:
+            # Contar linhas (tool calls)
+            with open(file, 'r') as f:
+                lines = [l for l in f if l.strip()]
+
+            sessions.append({
+                "session_id": file.stem,
+                "tool_calls": len(lines),
+                "file_size": file.stat().st_size,
+                "modified": file.stat().st_mtime * 1000
+            })
+        except Exception as e:
+            print(f"Erro ao ler audit file {file}: {e}")
+
+    return {
+        "sessions": sessions,
+        "count": len(sessions),
+        "audit_dir": str(AUDIT_DIR)
+    }
+
+
+@app.get("/audit/dashboard")
+async def get_audit_dashboard():
+    """Serve o dashboard HTML de auditoria."""
+    dashboard_path = STATIC_DIR / "audit_dashboard.html"
+
+    if not dashboard_path.exists():
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    return FileResponse(
+        dashboard_path,
+        media_type="text/html",
+        filename="audit_dashboard.html"
+    )
+
 
 if __name__ == "__main__":
     import uvicorn
