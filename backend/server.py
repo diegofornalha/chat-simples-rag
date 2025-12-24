@@ -212,25 +212,29 @@ async def health_check():
     }
 
 
+def _get_current_session_id() -> str:
+    """Obtém session_id do arquivo compartilhado com fallback."""
+    session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+    if session_file.exists():
+        try:
+            session_id = session_file.read_text().strip()
+            if session_id:
+                return session_id
+        except:
+            pass
+    return get_session_id()  # Fallback para logger
+
+
 @app.get("/session/current")
 async def get_current_session():
     """Retorna informações da sessão atual."""
     global client
 
-    # Ler session_id do arquivo compartilhado primeiro
-    session_file_path = Path.home() / ".claude" / ".agentfs" / "current_session"
-    session_id = None
+    # Usar a mesma lógica de _get_current_session_id() com fallback
+    session_id = _get_current_session_id()
 
-    if session_file_path.exists():
-        try:
-            file_session_id = session_file_path.read_text().strip()
-            if file_session_id and file_session_id != "default":
-                session_id = file_session_id
-        except:
-            pass
-
-    # Se não houver sessão no arquivo, retornar inativo
-    if not session_id:
+    # Se não houver sessão válida, retornar inativo
+    if not session_id or session_id == "default":
         return {
             "active": False,
             "session_id": None,
@@ -444,6 +448,19 @@ async def delete_session(session_id: str):
             shutil.rmtree(outputs_dir)
             print(f"🗑️ Pasta de outputs removida: {outputs_dir}")
 
+        # Deletar arquivos do AgentFS da sessão (se existirem)
+        agentfs_dir = Path.home() / ".claude" / ".agentfs"
+        agentfs_files = [
+            agentfs_dir / f"{session_id}.db",
+            agentfs_dir / f"{session_id}.db-wal",
+            agentfs_dir / f"{session_id}.db-shm",
+            agentfs_dir / "audit" / f"{session_id}.jsonl"
+        ]
+        for f in agentfs_files:
+            if f.exists():
+                f.unlink()
+                print(f"🗑️ AgentFS removido: {f.name}")
+
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -602,17 +619,6 @@ async def delete_output(filename: str, session_id: Optional[str] = None):
 
 AUDIT_DIR = Path.home() / ".claude" / ".agentfs" / "audit"
 STATIC_DIR = Path(__file__).parent / "static"
-
-
-def _get_current_session_id() -> str:
-    """Obtém session_id do arquivo compartilhado."""
-    session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
-    if session_file.exists():
-        try:
-            return session_file.read_text().strip()
-        except:
-            pass
-    return get_session_id()  # Fallback para logger
 
 
 @app.get("/audit/tools")
