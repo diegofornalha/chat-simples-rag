@@ -138,6 +138,12 @@ class KeyboardShortcuts {
     showShortcutHint() {
         // Adicionar hint sutil no footer
         const footer = document.querySelector('.chat-footer .footer-info');
+        
+        // Verificar se o elemento existe antes de usar
+        if (!footer) {
+            // Elemento não existe, não é crítico - apenas não mostra o hint
+            return;
+        }
 
         const hint = document.createElement('span');
         hint.innerHTML = '<small style="opacity: 0.5;">Ctrl+/ para atalhos</small>';
