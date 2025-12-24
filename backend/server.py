@@ -219,19 +219,18 @@ async def get_current_session():
 
     # Ler session_id do arquivo compartilhado primeiro
     session_file_path = Path.home() / ".claude" / ".agentfs" / "current_session"
+    session_id = None
+
     if session_file_path.exists():
         try:
             file_session_id = session_file_path.read_text().strip()
             if file_session_id and file_session_id != "default":
                 session_id = file_session_id
-            else:
-                session_id = get_session_id()
         except:
-            session_id = get_session_id()
-    else:
-        session_id = get_session_id()
+            pass
 
-    if client is None and (not session_id or session_id == "default"):
+    # Se não houver sessão no arquivo, retornar inativo
+    if not session_id:
         return {
             "active": False,
             "session_id": None,
@@ -340,6 +339,14 @@ async def reset_session(request: Request, api_key: str = Depends(verify_api_key)
     old_session_id = get_session_id()
     await reset_client()
 
+    # Limpar arquivo de sessão atual (AgentFS)
+    session_file_path = Path.home() / ".claude" / ".agentfs" / "current_session"
+    if session_file_path.exists():
+        try:
+            session_file_path.unlink()
+        except Exception:
+            pass
+
     # Aguardar nova sessão ser criada
     await asyncio.sleep(0.1)
     new_session_id = extract_session_id_from_jsonl()
@@ -419,14 +426,24 @@ async def get_session(session_id: str):
 
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
-    """Deleta uma sessão."""
+    """Deleta uma sessão e sua pasta de outputs."""
+    import shutil
+
     file_path = SESSIONS_DIR / f"{session_id}.jsonl"
 
     if not file_path.exists():
         return {"success": False, "error": "Sessão não encontrada"}
 
     try:
+        # Deletar arquivo da sessão
         file_path.unlink()
+
+        # Deletar pasta de outputs da sessão (se existir)
+        outputs_dir = RAG_OUTPUTS_DIR / session_id
+        if outputs_dir.exists() and outputs_dir.is_dir():
+            shutil.rmtree(outputs_dir)
+            print(f"🗑️ Pasta de outputs removida: {outputs_dir}")
+
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -599,14 +616,16 @@ def _get_current_session_id() -> str:
 
 
 @app.get("/audit/tools")
-async def get_audit_tools(limit: int = 100):
+async def get_audit_tools(limit: int = 100, session_id: Optional[str] = None):
     """
-    Retorna histórico de tool calls da sessão atual.
+    Retorna histórico de tool calls da sessão.
 
     Args:
         limit: Número máximo de registros (padrão 100)
+        session_id: ID da sessão (opcional, usa atual se não fornecido)
     """
-    session_id = _get_current_session_id()
+    if not session_id:
+        session_id = _get_current_session_id()
 
     if not session_id or session_id == "default":
         return {"error": "Nenhuma sessão ativa", "records": []}
@@ -643,9 +662,10 @@ async def get_audit_tools(limit: int = 100):
 
 
 @app.get("/audit/stats")
-async def get_audit_stats():
-    """Retorna estatísticas de auditoria da sessão atual."""
-    session_id = _get_current_session_id()
+async def get_audit_stats(session_id: Optional[str] = None):
+    """Retorna estatísticas de auditoria da sessão."""
+    if not session_id:
+        session_id = _get_current_session_id()
 
     if not session_id or session_id == "default":
         return {"error": "Nenhuma sessão ativa"}

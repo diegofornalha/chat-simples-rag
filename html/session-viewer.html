@@ -17,6 +17,17 @@
         <a id="back-to-projects" class="nav-link-top" href="index_projects.html" title="Voltar para lista">⟲ Projetos</a>
 
         <div class="chat-container">
+            <!-- Main Toolbar -->
+            <div class="chat-toolbar">
+                <div class="toolbar-left">
+                    <a id="history-link" class="toolbar-link" href="index_projects.html" title="Ver histórico de sessões">📁 Histórico</a>
+                    <a id="outputs-link" class="toolbar-link" href="output.html" title="Ver arquivos criados">📄 Outputs</a>
+                    <a id="audit-link" class="toolbar-link" href="audit_dashboard.html" title="Ver auditoria de tools">📊 Audit</a>
+                    <a class="toolbar-link" href="index.html" title="Iniciar novo chat">✨ Novo Chat</a>
+                </div>
+            </div>
+
+            <!-- Selection Toolbar -->
             <div id="selection-toolbar" class="selection-toolbar" style="display: none;">
                 <div class="selection-actions">
                     <button id="select-all-btn" class="selection-btn">Selecionar tudo</button>
@@ -172,6 +183,18 @@
         const urlParams = new URLSearchParams(window.location.search);
         const SESSION_ID = urlParams.get('session_id');
         let toolbarInitialized = false;
+
+        // Atualizar links com session_id
+        if (SESSION_ID) {
+            const outputsLink = document.getElementById('outputs-link');
+            const auditLink = document.getElementById('audit-link');
+            if (outputsLink) {
+                outputsLink.href = `output.html?session_id=${SESSION_ID}`;
+            }
+            if (auditLink) {
+                auditLink.href = `audit_dashboard.html?session_id=${SESSION_ID}`;
+            }
+        }
         let currentEntries = [];
         let messagesContainer = null;
         let deletingMessage = false;

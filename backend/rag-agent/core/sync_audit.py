@@ -216,7 +216,7 @@ def get_audit_queue() -> SyncAuditQueue:
 
 def audit_sync_tool(tool_name: str):
     """
-    Decorator para auditar tool calls síncronas.
+    Decorator para auditar tool calls síncronas e assíncronas.
     Non-blocking - usa threading para persistir.
 
     Usage:
@@ -224,55 +224,58 @@ def audit_sync_tool(tool_name: str):
         def search_documents(query: str):
             # ... código da tool ...
             return results
+
+        @audit_sync_tool("create_file")
+        async def create_file(path: str, content: str):
+            # ... código async da tool ...
+            return results
     """
     def decorator(func: Callable):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            audit = get_audit_queue()
-            start_time = int(time.time())
+        def _serialize_result(result):
+            """Serializa result de forma segura"""
+            try:
+                if isinstance(result, (dict, list)):
+                    result_str = json.dumps(result)
+                    if len(result_str) > 1000:
+                        return {"_truncated": True, "_size": len(result_str)}
+                    return result
+                elif isinstance(result, (str, int, float, bool)):
+                    return result
+                else:
+                    return str(result)[:500]
+            except:
+                return "[not serializable]"
 
-            # Captura parâmetros de forma segura
-            parameters = {
+        def _get_parameters(*args, **kwargs):
+            """Captura parâmetros de forma segura"""
+            return {
                 "args": [str(arg)[:200] for arg in args] if args else [],
                 "kwargs": {k: str(v)[:200] for k, v in kwargs.items()} if kwargs else {}
             }
 
+        # Wrapper async para funções assíncronas
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            audit = get_audit_queue()
+            start_time = int(time.time())
+            parameters = _get_parameters(*args, **kwargs)
+
             try:
-                result = func(*args, **kwargs)
+                result = await func(*args, **kwargs)
                 end_time = int(time.time())
 
-                # Serializa result de forma segura
-                result_serialized = None
-                try:
-                    if isinstance(result, (dict, list)):
-                        # Limitar tamanho do resultado
-                        result_str = json.dumps(result)
-                        if len(result_str) > 1000:
-                            result_serialized = {"_truncated": True, "_size": len(result_str)}
-                        else:
-                            result_serialized = result
-                    elif isinstance(result, (str, int, float, bool)):
-                        result_serialized = result
-                    else:
-                        result_serialized = str(result)[:500]
-                except:
-                    result_serialized = "[not serializable]"
-
-                # Registrar (non-blocking)
                 audit.record(
                     tool_name=tool_name,
                     started_at=start_time,
                     completed_at=end_time,
                     parameters=parameters,
-                    result=result_serialized
+                    result=_serialize_result(result)
                 )
 
                 return result
 
             except Exception as e:
                 end_time = int(time.time())
-
-                # Registrar erro
                 audit.record(
                     tool_name=tool_name,
                     started_at=start_time,
@@ -280,8 +283,43 @@ def audit_sync_tool(tool_name: str):
                     parameters=parameters,
                     error=str(e)
                 )
-
                 raise
 
-        return wrapper
+        # Wrapper sync para funções síncronas
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            audit = get_audit_queue()
+            start_time = int(time.time())
+            parameters = _get_parameters(*args, **kwargs)
+
+            try:
+                result = func(*args, **kwargs)
+                end_time = int(time.time())
+
+                audit.record(
+                    tool_name=tool_name,
+                    started_at=start_time,
+                    completed_at=end_time,
+                    parameters=parameters,
+                    result=_serialize_result(result)
+                )
+
+                return result
+
+            except Exception as e:
+                end_time = int(time.time())
+                audit.record(
+                    tool_name=tool_name,
+                    started_at=start_time,
+                    completed_at=end_time,
+                    parameters=parameters,
+                    error=str(e)
+                )
+                raise
+
+        # Detecta se função é async e retorna o wrapper apropriado
+        import asyncio
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
     return decorator

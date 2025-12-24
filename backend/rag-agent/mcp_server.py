@@ -545,6 +545,7 @@ def clear_cache(cache_type: str = "all") -> dict:
 # =============================================================================
 
 @mcp.tool()
+@audit_sync_tool("create_file")
 async def create_file(path: str, content: str) -> dict:
     """
     Cria arquivo no filesystem do agent.
@@ -591,6 +592,7 @@ async def create_file(path: str, content: str) -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("read_file")
 async def read_file(path: str) -> dict:
     """
     Lê arquivo do filesystem do agent.
@@ -633,6 +635,7 @@ async def read_file(path: str) -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("list_files")
 async def list_files(directory: str = "/") -> dict:
     """
     Lista arquivos no filesystem do agent.
@@ -688,6 +691,7 @@ async def list_files(directory: str = "/") -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("delete_file")
 async def delete_file(path: str) -> dict:
     """
     Remove arquivo do filesystem.
@@ -722,6 +726,7 @@ async def delete_file(path: str) -> dict:
 
 
 @mcp.tool()
+@audit_sync_tool("get_file_info")
 async def get_file_info(path: str) -> dict:
     """
     Obtém informações sobre um arquivo.

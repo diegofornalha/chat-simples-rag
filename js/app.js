@@ -278,6 +278,17 @@ class ClaudeChatApp {
         }
     }
 
+    updateAuditLink() {
+        const auditLink = document.getElementById('audit-link');
+        if (auditLink) {
+            if (this.currentSessionId) {
+                auditLink.href = `audit_dashboard.html?session_id=${this.currentSessionId}`;
+            } else {
+                auditLink.href = 'audit_dashboard.html';
+            }
+        }
+    }
+
     autoResizeInput() {
         if (!this.messageInput) return;
         this.messageInput.style.height = 'auto';
@@ -949,6 +960,10 @@ class ClaudeChatApp {
         this.currentMessage = null;
         this.currentMessageContent = null;
         this.updateMessageCount();
+
+        // 2.1. Atualizar links para remover session_id (usará auto-redirect)
+        this.updateOutputsLink();
+        this.updateAuditLink();
         
         // 3. Esconder indicador de digitação se estiver visível
         this.hideTypingIndicator();
@@ -1008,6 +1023,7 @@ class ClaudeChatApp {
                 const lastSession = data.sessions[0];
                 this.currentSessionId = lastSession.session_id;
                 this.updateOutputsLink();
+                this.updateAuditLink();
 
                 // Carregar mensagens da sessão
                 const sessionResp = await fetch(`${this.apiUrl}/sessions/${this.currentSessionId}`);
