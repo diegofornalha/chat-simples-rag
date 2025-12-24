@@ -1,8 +1,8 @@
 """
 =============================================================================
-SYNC AUDIT - Auditoria Síncrona para MCP Tools
+SYNC AUDIT - Auditoria Sincrona para MCP Tools
 =============================================================================
-Registra tool calls de forma síncrona usando threading para não bloquear.
+Registra tool calls de forma sincrona usando threading para nao bloquear.
 Funciona com o AgentFS compartilhado entre processos.
 =============================================================================
 """
@@ -39,8 +39,8 @@ class ToolCallRecord:
 
 class SyncAuditQueue:
     """
-    Fila de auditoria síncrona que persiste em arquivo.
-    Usa threading para não bloquear as tools.
+    Fila de auditoria sincrona que persiste em arquivo.
+    Usa threading para nao bloquear as tools.
     """
 
     def __init__(self):
@@ -55,26 +55,37 @@ class SyncAuditQueue:
         self._init_from_env()
 
     def _init_from_env(self):
-        """Inicializa a partir de variáveis de ambiente."""
+        """Inicializa a partir de variaveis de ambiente ou arquivo compartilhado."""
+        # Primeiro tentar variavel de ambiente
         session_id = os.environ.get("AGENTFS_SESSION_ID")
+
+        # Se nao houver, tentar arquivo compartilhado
+        if not session_id:
+            session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+            if session_file.exists():
+                try:
+                    session_id = session_file.read_text().strip()
+                except Exception:
+                    pass
+
         if session_id:
             self.set_session(session_id)
 
     def set_session(self, session_id: str):
-        """Define a sessão atual e inicia o worker."""
+        """Define a sessao atual e inicia o worker."""
         self._session_id = session_id
 
-        # Criar diretório de auditoria
+        # Criar diretorio de auditoria
         audit_dir = Path.home() / ".claude" / ".agentfs" / "audit"
         audit_dir.mkdir(parents=True, exist_ok=True)
 
-        # Arquivo de auditoria por sessão
+        # Arquivo de auditoria por sessao
         self._audit_file = audit_dir / f"{session_id}.jsonl"
 
         # Carregar registros existentes
         self._load_existing_records()
 
-        # Iniciar worker thread se não estiver rodando
+        # Iniciar worker thread se nao estiver rodando
         if not self._running:
             self._start_worker()
 
@@ -152,12 +163,12 @@ class SyncAuditQueue:
         self._queue.put(record)
 
     def get_records(self, limit: int = 100) -> list[dict]:
-        """Retorna os últimos N registros."""
+        """Retorna os ultimos N registros."""
         records = self._records[-limit:] if limit else self._records
         return [asdict(r) for r in records]
 
     def get_stats(self) -> dict:
-        """Retorna estatísticas de auditoria."""
+        """Retorna estatisticas de auditoria."""
         if not self._records:
             return {
                 "total_calls": 0,
@@ -191,7 +202,7 @@ class SyncAuditQueue:
             self._worker_thread.join(timeout=5.0)
 
 
-# Instância global
+# Instancia global
 _audit_queue: Optional[SyncAuditQueue] = None
 
 
@@ -205,63 +216,66 @@ def get_audit_queue() -> SyncAuditQueue:
 
 def audit_sync_tool(tool_name: str):
     """
-    Decorator para auditar tool calls síncronas.
+    Decorator para auditar tool calls sincronas e assincronas.
     Non-blocking - usa threading para persistir.
 
     Usage:
         @audit_sync_tool("search_documents")
         def search_documents(query: str):
-            # ... código da tool ...
+            # ... codigo da tool ...
+            return results
+
+        @audit_sync_tool("create_file")
+        async def create_file(path: str, content: str):
+            # ... codigo async da tool ...
             return results
     """
     def decorator(func: Callable):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            audit = get_audit_queue()
-            start_time = int(time.time())
+        def _serialize_result(result):
+            """Serializa result de forma segura"""
+            try:
+                if isinstance(result, (dict, list)):
+                    result_str = json.dumps(result)
+                    if len(result_str) > 1000:
+                        return {"_truncated": True, "_size": len(result_str)}
+                    return result
+                elif isinstance(result, (str, int, float, bool)):
+                    return result
+                else:
+                    return str(result)[:500]
+            except:
+                return "[not serializable]"
 
-            # Captura parâmetros de forma segura
-            parameters = {
+        def _get_parameters(*args, **kwargs):
+            """Captura parametros de forma segura"""
+            return {
                 "args": [str(arg)[:200] for arg in args] if args else [],
                 "kwargs": {k: str(v)[:200] for k, v in kwargs.items()} if kwargs else {}
             }
 
+        # Wrapper async para funcoes assincronas
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            audit = get_audit_queue()
+            start_time = int(time.time())
+            parameters = _get_parameters(*args, **kwargs)
+
             try:
-                result = func(*args, **kwargs)
+                result = await func(*args, **kwargs)
                 end_time = int(time.time())
 
-                # Serializa result de forma segura
-                result_serialized = None
-                try:
-                    if isinstance(result, (dict, list)):
-                        # Limitar tamanho do resultado
-                        result_str = json.dumps(result)
-                        if len(result_str) > 1000:
-                            result_serialized = {"_truncated": True, "_size": len(result_str)}
-                        else:
-                            result_serialized = result
-                    elif isinstance(result, (str, int, float, bool)):
-                        result_serialized = result
-                    else:
-                        result_serialized = str(result)[:500]
-                except:
-                    result_serialized = "[not serializable]"
-
-                # Registrar (non-blocking)
                 audit.record(
                     tool_name=tool_name,
                     started_at=start_time,
                     completed_at=end_time,
                     parameters=parameters,
-                    result=result_serialized
+                    result=_serialize_result(result)
                 )
 
                 return result
 
             except Exception as e:
                 end_time = int(time.time())
-
-                # Registrar erro
                 audit.record(
                     tool_name=tool_name,
                     started_at=start_time,
@@ -269,8 +283,43 @@ def audit_sync_tool(tool_name: str):
                     parameters=parameters,
                     error=str(e)
                 )
-
                 raise
 
-        return wrapper
+        # Wrapper sync para funcoes sincronas
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            audit = get_audit_queue()
+            start_time = int(time.time())
+            parameters = _get_parameters(*args, **kwargs)
+
+            try:
+                result = func(*args, **kwargs)
+                end_time = int(time.time())
+
+                audit.record(
+                    tool_name=tool_name,
+                    started_at=start_time,
+                    completed_at=end_time,
+                    parameters=parameters,
+                    result=_serialize_result(result)
+                )
+
+                return result
+
+            except Exception as e:
+                end_time = int(time.time())
+                audit.record(
+                    tool_name=tool_name,
+                    started_at=start_time,
+                    completed_at=end_time,
+                    parameters=parameters,
+                    error=str(e)
+                )
+                raise
+
+        # Detecta se funcao eh async e retorna o wrapper apropriado
+        import asyncio
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
     return decorator

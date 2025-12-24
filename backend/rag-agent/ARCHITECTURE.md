@@ -57,35 +57,55 @@ LIMIT 5;
 - `vector_distance_l2()` - distancia euclidiana
 - MCP Server nativo (opcional)
 
-### 2. AgentFS (State Management)
+### 2. AgentFS (Lifecycle Management)
 
-**Funcao**: Gerenciar estado do agente e auditoria
+**Funcao**: Gerenciar lifecycle do agente SQLite por sessao
 
 ```python
-from agentfs_sdk import AgentFS
+from core.agentfs_manager import init_agentfs, close_agentfs, ensure_agentfs
 
-agent = await AgentFS.open({ "id": "rag-atlantyx" })
+# Inicializar para uma sessao
+agent = await init_agentfs(session_id)
 
-# Key-Value para estado da sessao
-await agent.kv.set("session:current", { "question_id": 1 })
+# Obter instancia garantida
+agent = await ensure_agentfs()  # Le session_id do arquivo compartilhado
 
-# Filesystem para outputs
-await agent.fs.writeFile("/answers/q1.json", answer_json)
-
-# Audit trail de tool calls
-await agent.tools.record(
-    "search_documents",
-    start_time,
-    end_time,
-    { "query": "politica de IA" },
-    { "results": [...] }
-)
+# Fechar ao encerrar sessao
+await close_agentfs()
 ```
 
+**Arquivos gerenciados** (em `~/.claude/.agentfs/`):
+- `{session_id}.db` - SQLite database (disponivel para KV futuro)
+- `{session_id}.db-wal` - Write-ahead log
+- `current_session` - ID da sessao ativa
+
+**Status**: Lifecycle gerenciado, DB disponivel para uso futuro de KV/FS.
+
+### 2.1. Auditoria de Tool Calls (sync_audit.py)
+
+**Funcao**: Registrar tool calls de forma non-blocking via threading
+
+```python
+from core.sync_audit import audit_sync_tool
+
+@audit_sync_tool("search_documents")
+async def search_documents(query: str, top_k: int = 5) -> list:
+    # ... codigo da tool ...
+    return results
+
+# Funciona com funcoes sync e async automaticamente
+@audit_sync_tool("list_sources")
+def list_sources() -> list:
+    return ["doc1.pdf", "doc2.docx"]
+```
+
+**Arquivos** (em `~/.claude/.agentfs/audit/`):
+- `{session_id}.jsonl` - Registros em JSON Lines
+
 **Beneficios**:
-- Auditabilidade: todas operacoes ficam em SQLite
-- Reproducibilidade: snapshot do estado a qualquer momento
-- Portabilidade: um unico arquivo .db
+- Non-blocking: usa threading para persistir sem bloquear tools
+- Suporta sync e async: detecta automaticamente o tipo da funcao
+- Auditoria completa: parametros, resultado, duracao, erros
 
 ### 3. MCP Server (RAG Tools)
 
@@ -241,20 +261,37 @@ Usuario faz pergunta
 ## Estrutura de Pastas
 
 ```
-/chat-simples/backend/rag-agent/
-├── ARCHITECTURE.md          # Este arquivo
-├── config.py                # Configuracao do agente
-├── ingest/
+/chat-simples/backend/
+├── server.py                # API principal (FastAPI)
+├── core/
 │   ├── __init__.py
-│   ├── extract.py           # Extracao de texto
-│   ├── chunk.py             # Chunking
-│   └── embed.py             # Geracao de embeddings
-├── mcp_server.py            # MCP tools para RAG
-├── rag_agent.py             # Agente principal
-├── database/
-│   └── rag-atlantyx.db      # Turso database
-└── .agentfs/
-    └── rag-atlantyx.db      # AgentFS state
+│   ├── logger.py            # Logging estruturado (structlog)
+│   ├── agentfs_manager.py   # Lifecycle do AgentFS (singleton)
+│   └── sync_audit.py        # Auditoria non-blocking (threading + JSONL)
+│
+├── rag-agent/
+│   ├── ARCHITECTURE.md      # Este arquivo
+│   ├── config.py            # Configuracao do agente
+│   ├── core/                # Copia sincronizada de ../core/
+│   │   ├── agentfs_manager.py
+│   │   └── sync_audit.py
+│   ├── ingest/
+│   │   ├── __init__.py
+│   │   ├── extract.py       # Extracao de texto
+│   │   ├── chunk.py         # Chunking
+│   │   └── embed.py         # Geracao de embeddings
+│   ├── mcp_server.py        # MCP tools para RAG
+│   └── rag_agent.py         # Agente principal
+│
+└── agentfs/                 # SDK do AgentFS
+    └── sdk/python/
+
+~/.claude/.agentfs/          # Runtime data (por sessao)
+├── {session_id}.db          # AgentFS SQLite
+├── {session_id}.db-wal      # Write-ahead log
+├── current_session          # ID da sessao ativa
+└── audit/
+    └── {session_id}.jsonl   # Audit trail das tools
 ```
 
 ## Configuracao do Agente
