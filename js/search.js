@@ -13,6 +13,12 @@ class SearchSystem {
     }
 
     init() {
+        // Verificar se o elemento existe antes de usar
+        if (!this.searchInput) {
+            console.warn('⚠️ Search input não encontrado, sistema de busca desabilitado');
+            return;
+        }
+        
         // Debounce search
         let searchTimeout;
         this.searchInput.addEventListener('input', (e) => {
@@ -156,19 +162,25 @@ class SearchSystem {
         const count = this.currentResults.length;
         const current = this.currentIndex + 1;
 
-        this.searchInput.title = `Resultado ${current}/${count}`;
-        this.searchInput.style.borderColor = '#10b981';
+        if (this.searchInput) {
+            this.searchInput.title = `Resultado ${current}/${count}`;
+            this.searchInput.style.borderColor = '#10b981';
+        }
     }
 
     showNoResults() {
-        this.searchInput.title = 'Nenhum resultado encontrado';
-        this.searchInput.style.borderColor = '#ef4444';
+        if (this.searchInput) {
+            this.searchInput.title = 'Nenhum resultado encontrado';
+            this.searchInput.style.borderColor = '#ef4444';
+        }
     }
 
     clear() {
-        this.searchInput.value = '';
-        this.searchInput.style.borderColor = '';
-        this.searchInput.title = '';
+        if (this.searchInput) {
+            this.searchInput.value = '';
+            this.searchInput.style.borderColor = '';
+            this.searchInput.title = '';
+        }
         this.clearHighlights();
         this.currentResults = [];
         this.currentIndex = -1;
