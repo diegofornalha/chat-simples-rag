@@ -547,7 +547,7 @@ def clear_cache(cache_type: str = "all") -> dict:
 @mcp.tool()
 async def create_file(path: str, content: str) -> dict:
     """
-    Cria arquivo no filesystem do agent (AgentFS + local).
+    Cria arquivo no filesystem do agent.
 
     Args:
         path: Nome do arquivo (ex: "resumo.txt")
@@ -556,27 +556,34 @@ async def create_file(path: str, content: str) -> dict:
     Returns:
         Informações sobre o arquivo criado
     """
+    from pathlib import Path
+    import os
+
+    storage_type = "local"
+
     try:
-        from core.agentfs_manager import get_agentfs
-        from pathlib import Path
+        # Determina pasta de outputs da sessão
+        session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+        if session_file.exists():
+            session_id = session_file.read_text().strip()
+            outputs_dir = Path(__file__).parent / "outputs" / session_id
+        else:
+            outputs_dir = Path(__file__).parent / "outputs"
 
-        agentfs = get_agentfs()
+        outputs_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Escreve em AgentFS (SQLite)
-        await agentfs.fs.write_file(f"/{path}", content.encode('utf-8'))
-
-        # 2. Escreve em local (backward compatibility)
-        local_path = Path.cwd() / path
+        # Escreve no diretório de outputs da sessão
+        local_path = outputs_dir / path
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_text(content, encoding='utf-8')
 
-        logger.info("Arquivo criado", path=path, size=len(content))
+        logger.info("Arquivo criado", path=str(local_path), size=len(content))
 
         return {
             "success": True,
-            "path": path,
+            "path": str(local_path),
             "size": len(content),
-            "storage": "agentfs+local"
+            "storage": storage_type
         }
     except Exception as e:
         logger.error(f"Erro ao criar arquivo: {e}", path=path, error=str(e))
@@ -594,18 +601,29 @@ async def read_file(path: str) -> dict:
     Returns:
         Conteúdo do arquivo
     """
+    from pathlib import Path
+
     try:
-        from core.agentfs_manager import get_agentfs
+        # Primeiro tenta ler como caminho absoluto
+        file_path = Path(path)
+        if not file_path.is_absolute():
+            # Tenta na pasta de outputs da sessão
+            session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+            if session_file.exists():
+                session_id = session_file.read_text().strip()
+                file_path = Path(__file__).parent / "outputs" / session_id / path
+            else:
+                file_path = Path(__file__).parent / "outputs" / path
 
-        agentfs = get_agentfs()
-        content_bytes = await agentfs.fs.read_file(f"/{path}")
-        content = content_bytes.decode('utf-8')
+        if not file_path.exists():
+            return {"success": False, "error": f"Arquivo não encontrado: {path}"}
 
-        logger.info("Arquivo lido", path=path, size=len(content))
+        content = file_path.read_text(encoding='utf-8')
+        logger.info("Arquivo lido", path=str(file_path), size=len(content))
 
         return {
             "success": True,
-            "path": path,
+            "path": str(file_path),
             "content": content,
             "size": len(content)
         }
@@ -625,28 +643,42 @@ async def list_files(directory: str = "/") -> dict:
     Returns:
         Lista de arquivos e diretórios
     """
-    try:
-        from core.agentfs_manager import get_agentfs
+    from pathlib import Path
+    import os
 
-        agentfs = get_agentfs()
-        entries = await agentfs.fs.readdir(directory)
+    try:
+        # Determina pasta de outputs da sessão
+        session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+        if session_file.exists():
+            session_id = session_file.read_text().strip()
+            base_dir = Path(__file__).parent / "outputs" / session_id
+        else:
+            base_dir = Path(__file__).parent / "outputs"
+
+        # Se directory é "/", lista a raiz dos outputs
+        if directory == "/" or directory == "":
+            list_dir = base_dir
+        else:
+            list_dir = base_dir / directory.lstrip("/")
+
+        if not list_dir.exists():
+            list_dir.mkdir(parents=True, exist_ok=True)
 
         files = []
-        for entry in entries:
-            entry_path = f"{directory.rstrip('/')}/{entry}"
-            stats = await agentfs.fs.stat(entry_path)
+        for entry in list_dir.iterdir():
+            stat = entry.stat()
             files.append({
-                "name": entry,
-                "size": stats.size,
-                "is_dir": stats.is_directory(),
-                "modified": stats.mtime
+                "name": entry.name,
+                "size": stat.st_size,
+                "is_dir": entry.is_dir(),
+                "modified": stat.st_mtime
             })
 
-        logger.info("Diretório listado", directory=directory, count=len(files))
+        logger.info("Diretório listado", directory=str(list_dir), count=len(files))
 
         return {
             "success": True,
-            "directory": directory,
+            "directory": str(list_dir),
             "files": files,
             "count": len(files)
         }
@@ -666,23 +698,24 @@ async def delete_file(path: str) -> dict:
     Returns:
         Status da operação
     """
+    from pathlib import Path
+
     try:
-        from core.agentfs_manager import get_agentfs
-        from pathlib import Path
+        # Determina pasta de outputs da sessão
+        session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+        if session_file.exists():
+            session_id = session_file.read_text().strip()
+            file_path = Path(__file__).parent / "outputs" / session_id / path
+        else:
+            file_path = Path(__file__).parent / "outputs" / path
 
-        agentfs = get_agentfs()
+        if not file_path.exists():
+            return {"success": False, "error": f"Arquivo não encontrado: {path}"}
 
-        # Remove do AgentFS
-        await agentfs.fs.delete_file(f"/{path}")
+        file_path.unlink()
+        logger.info("Arquivo deletado", path=str(file_path))
 
-        # Remove do local (backward compatibility)
-        local_path = Path.cwd() / path
-        if local_path.exists():
-            local_path.unlink()
-
-        logger.info("Arquivo deletado", path=path)
-
-        return {"success": True, "path": path}
+        return {"success": True, "path": str(file_path)}
     except Exception as e:
         logger.error(f"Erro ao deletar arquivo: {e}", path=path, error=str(e))
         return {"success": False, "error": str(e)}
@@ -699,21 +732,30 @@ async def get_file_info(path: str) -> dict:
     Returns:
         Metadados do arquivo
     """
+    from pathlib import Path
+
     try:
-        from core.agentfs_manager import get_agentfs
+        # Determina pasta de outputs da sessão
+        session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+        if session_file.exists():
+            session_id = session_file.read_text().strip()
+            file_path = Path(__file__).parent / "outputs" / session_id / path
+        else:
+            file_path = Path(__file__).parent / "outputs" / path
 
-        agentfs = get_agentfs()
-        stats = await agentfs.fs.stat(f"/{path}")
+        if not file_path.exists():
+            return {"success": False, "error": f"Arquivo não encontrado: {path}"}
 
-        logger.info("Info do arquivo obtida", path=path)
+        stat = file_path.stat()
+        logger.info("Info do arquivo obtida", path=str(file_path))
 
         return {
             "success": True,
-            "path": path,
-            "size": stats.size,
-            "is_dir": stats.is_directory(),
-            "created_at": stats.ctime,
-            "modified_at": stats.mtime
+            "path": str(file_path),
+            "size": stat.st_size,
+            "is_dir": file_path.is_dir(),
+            "created_at": stat.st_ctime,
+            "modified_at": stat.st_mtime
         }
     except Exception as e:
         logger.error(f"Erro ao obter info do arquivo: {e}", path=path, error=str(e))
@@ -737,9 +779,9 @@ async def set_state(key: str, value: str) -> dict:
         Confirmação do salvamento
     """
     try:
-        from core.agentfs_manager import get_agentfs
+        from core.agentfs_manager import ensure_agentfs
 
-        agentfs = get_agentfs()
+        agentfs = await ensure_agentfs()
         await agentfs.kv.set(key, value)
 
         logger.info("Estado salvo", key=key, size=len(value))
@@ -767,9 +809,9 @@ async def get_state(key: str) -> dict:
         Valor armazenado ou erro se não existir
     """
     try:
-        from core.agentfs_manager import get_agentfs
+        from core.agentfs_manager import ensure_agentfs
 
-        agentfs = get_agentfs()
+        agentfs = await ensure_agentfs()
         value = await agentfs.kv.get(key)
 
         if value is None:
@@ -804,9 +846,9 @@ async def delete_state(key: str) -> dict:
         Confirmação da remoção
     """
     try:
-        from core.agentfs_manager import get_agentfs
+        from core.agentfs_manager import ensure_agentfs
 
-        agentfs = get_agentfs()
+        agentfs = await ensure_agentfs()
         await agentfs.kv.delete(key)
 
         logger.info("Estado removido", key=key)
@@ -829,9 +871,9 @@ async def list_states(prefix: str = "") -> dict:
         Lista de chaves disponíveis
     """
     try:
-        from core.agentfs_manager import get_agentfs
+        from core.agentfs_manager import ensure_agentfs
 
-        agentfs = get_agentfs()
+        agentfs = await ensure_agentfs()
         keys = await agentfs.kv.list(prefix=prefix if prefix else None)
 
         logger.info("Estados listados", prefix=prefix, count=len(keys))

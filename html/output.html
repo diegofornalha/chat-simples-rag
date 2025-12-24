@@ -207,12 +207,42 @@
     </div>
 
     <script>
+        // Obtém session_id da URL
+        const urlParams = new URLSearchParams(window.location.search);
+        let sessionId = urlParams.get('session_id');
+
+        // Se não tiver session_id na URL, busca do servidor e redireciona
+        async function initSession() {
+            if (!sessionId) {
+                try {
+                    const res = await fetch('http://localhost:8001/session/current');
+                    const data = await res.json();
+                    if (data.active && data.session_id) {
+                        // Redireciona para incluir session_id na URL
+                        window.location.href = `output.html?session_id=${data.session_id}`;
+                        return false;
+                    }
+                } catch (err) {
+                    console.log('Não foi possível obter sessão atual');
+                }
+            }
+            return true;
+        }
+
+        // Atualiza título se tiver session_id
+        if (sessionId) {
+            document.querySelector('header p').textContent = `Sessão: ${sessionId.substring(0, 8)}...`;
+        }
+
         async function loadFiles() {
             const list = document.getElementById('file-list');
             list.innerHTML = '<li class="loading">Carregando...</li>';
 
             try {
-                const res = await fetch('http://localhost:8001/outputs');
+                const url = sessionId
+                    ? `http://localhost:8001/outputs?session_id=${sessionId}`
+                    : 'http://localhost:8001/outputs';
+                const res = await fetch(url);
                 const data = await res.json();
 
                 if (!data.files || data.files.length === 0) {
@@ -229,7 +259,7 @@
                     <li class="file-item">
                         <div class="file-icon">${getFileIcon(file.name)}</div>
                         <div class="file-info">
-                            <a href="${file.name}" class="file-name" target="_blank">${file.name}</a>
+                            <a href="http://localhost:8001/outputs/${file.name}${sessionId ? '?session_id=' + sessionId : ''}" class="file-name" target="_blank">${file.name}</a>
                             <div class="file-meta">${formatSize(file.size)} - ${formatDate(file.modified)}</div>
                         </div>
                         <div class="file-actions">
@@ -283,17 +313,21 @@
         }
 
         function downloadFile(name) {
+            const url = sessionId
+                ? `http://localhost:8001/outputs/file/${name}?session_id=${sessionId}`
+                : `http://localhost:8001/outputs/file/${name}`;
             const link = document.createElement('a');
-            link.href = name;
+            link.href = url;
             link.download = name;
             link.click();
         }
 
         async function deleteFile(name) {
-            if (!confirm('Excluir ' + name + '?')) return;
-
             try {
-                await fetch('http://localhost:8001/outputs/' + name, { method: 'DELETE' });
+                const url = sessionId
+                    ? `http://localhost:8001/outputs/${name}?session_id=${sessionId}`
+                    : `http://localhost:8001/outputs/${name}`;
+                await fetch(url, { method: 'DELETE' });
                 loadFiles();
             } catch (err) {
                 alert('Erro ao excluir arquivo');
@@ -301,7 +335,9 @@
         }
 
         // Carregar ao iniciar
-        loadFiles();
+        initSession().then(shouldLoad => {
+            if (shouldLoad) loadFiles();
+        });
     </script>
 </body>
 </html>

@@ -123,3 +123,36 @@ def is_initialized() -> bool:
 def get_current_session_id() -> Optional[str]:
     """Retorna o session_id atual (se houver)."""
     return _current_session_id
+
+
+async def ensure_agentfs() -> AgentFS:
+    """
+    Garante que AgentFS está inicializado, inicializando se necessário.
+
+    Lê o session_id do arquivo compartilhado se não estiver inicializado.
+
+    Returns:
+        Instância do AgentFS
+
+    Raises:
+        RuntimeError: Se não conseguir inicializar
+    """
+    global _agentfs, _current_session_id
+
+    # Se já está inicializado, retorna
+    if _agentfs is not None:
+        return _agentfs
+
+    # Tenta ler session_id do arquivo compartilhado
+    session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+
+    if session_file.exists():
+        session_id = session_file.read_text().strip()
+        if session_id:
+            logger.info("Inicializando AgentFS a partir do arquivo de sessão", session_id=session_id)
+            return await init_agentfs(session_id)
+
+    raise RuntimeError(
+        "AgentFS não inicializado e não foi possível determinar session_id. "
+        "Certifique-se de que o servidor iniciou uma sessão primeiro."
+    )

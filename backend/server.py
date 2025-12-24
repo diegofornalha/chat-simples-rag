@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 import json
 import os
 import sys
@@ -151,13 +152,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS restritivo (Debito #1)
+# CORS - permitir localhost em dev
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_allowed_origins(),
+    allow_origins=["http://localhost:3000", "http://localhost:8001", "http://127.0.0.1:3000", "http://127.0.0.1:8001"],
     allow_credentials=True,
-    allow_methods=get_allowed_methods(),
-    allow_headers=get_allowed_headers(),
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Rate limiter (Debito #2)
@@ -216,14 +217,26 @@ async def get_current_session():
     """Retorna informações da sessão atual."""
     global client
 
-    if client is None:
+    # Ler session_id do arquivo compartilhado primeiro
+    session_file_path = Path.home() / ".claude" / ".agentfs" / "current_session"
+    if session_file_path.exists():
+        try:
+            file_session_id = session_file_path.read_text().strip()
+            if file_session_id and file_session_id != "default":
+                session_id = file_session_id
+            else:
+                session_id = get_session_id()
+        except:
+            session_id = get_session_id()
+    else:
+        session_id = get_session_id()
+
+    if client is None and (not session_id or session_id == "default"):
         return {
             "active": False,
             "session_id": None,
             "message": "Nenhuma sessão ativa"
         }
-
-    session_id = get_session_id()
     session_file = SESSIONS_DIR / f"{session_id}.jsonl"
 
     # Contar mensagens
@@ -353,13 +366,8 @@ async def list_sessions():
             lines = file.read_text().strip().split('\n')
             message_count = len(lines)
 
-            # Extrair sessionId da primeira linha
-            session_id = file.stem  # Fallback
-            try:
-                first_data = json.loads(lines[0])
-                session_id = first_data.get("sessionId", session_id)
-            except:
-                pass
+            # Usar nome do arquivo como session_id único
+            session_id = file.stem
 
             # Tentar extrair modelo da primeira mensagem
             model = "unknown"
@@ -410,7 +418,7 @@ async def get_session(session_id: str):
     return {"count": len(messages), "messages": messages}
 
 @app.delete("/sessions/{session_id}")
-async def delete_session(session_id: str, api_key: str = Depends(verify_api_key)):
+async def delete_session(session_id: str):
     """Deleta uma sessão."""
     file_path = SESSIONS_DIR / f"{session_id}.jsonl"
 
@@ -497,7 +505,7 @@ async def get_session_rag_outputs_detailed(session_id: str):
 
 
 @app.delete("/sessions/{session_id}/rag-outputs")
-async def delete_session_rag_outputs(session_id: str, api_key: str = Depends(verify_api_key)):
+async def delete_session_rag_outputs(session_id: str):
     """Deleta todos os outputs RAG de uma sessão."""
     session_dir = RAG_OUTPUTS_DIR / session_id
 
@@ -511,17 +519,28 @@ async def delete_session_rag_outputs(session_id: str, api_key: str = Depends(ver
         return {"success": False, "error": str(e)}
 
 
-OUTPUTS_DIR = Path(__file__).parent / "outputs"
+def _get_session_outputs_dir(session_id: Optional[str] = None) -> Path:
+    """Retorna diretório de outputs da sessão."""
+    if session_id:
+        return RAG_OUTPUTS_DIR / session_id
+
+    session_file = Path.home() / ".claude" / ".agentfs" / "current_session"
+    if session_file.exists():
+        current_session = session_file.read_text().strip()
+        return RAG_OUTPUTS_DIR / current_session
+    return RAG_OUTPUTS_DIR
 
 @app.get("/outputs")
-async def list_outputs():
-    """Lista arquivos da pasta outputs."""
-    if not OUTPUTS_DIR.exists():
-        return {"files": []}
+async def list_outputs(session_id: Optional[str] = None):
+    """Lista arquivos da pasta outputs de uma sessão."""
+    outputs_dir = _get_session_outputs_dir(session_id)
+
+    if not outputs_dir.exists():
+        return {"files": [], "directory": str(outputs_dir), "session_id": session_id}
 
     files = []
-    for file in OUTPUTS_DIR.iterdir():
-        if file.is_file() and file.name != "index.html":
+    for file in outputs_dir.iterdir():
+        if file.is_file():
             stat = file.stat()
             files.append({
                 "name": file.name,
@@ -530,18 +549,29 @@ async def list_outputs():
             })
 
     files.sort(key=lambda f: f["modified"], reverse=True)
-    return {"files": files}
+    return {"files": files, "directory": str(outputs_dir), "session_id": session_id}
+
+@app.get("/outputs/file/{filename}")
+async def get_output_file(filename: str, session_id: Optional[str] = None):
+    """Retorna conteúdo de um arquivo de output."""
+    from fastapi.responses import FileResponse
+
+    outputs_dir = _get_session_outputs_dir(session_id)
+    file_path = outputs_dir / filename
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+
+    return FileResponse(file_path, filename=filename)
 
 @app.delete("/outputs/{filename}")
-async def delete_output(filename: str, api_key: str = Depends(verify_api_key)):
-    """Deleta um arquivo da pasta outputs."""
-    file_path = OUTPUTS_DIR / filename
+async def delete_output(filename: str, session_id: Optional[str] = None):
+    """Deleta um arquivo da pasta outputs de uma sessão."""
+    outputs_dir = _get_session_outputs_dir(session_id)
+    file_path = outputs_dir / filename
 
     if not file_path.exists():
         return {"success": False, "error": "Arquivo nao encontrado"}
-
-    if file_path.name == "index.html":
-        return {"success": False, "error": "Nao pode deletar index.html"}
 
     try:
         file_path.unlink()

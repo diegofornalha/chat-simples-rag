@@ -267,6 +267,17 @@ class ClaudeChatApp {
         });
     }
 
+    updateOutputsLink() {
+        const outputsLink = document.getElementById('outputs-link');
+        if (outputsLink) {
+            if (this.currentSessionId) {
+                outputsLink.href = `output.html?session_id=${this.currentSessionId}`;
+            } else {
+                outputsLink.href = 'output.html';
+            }
+        }
+    }
+
     autoResizeInput() {
         if (!this.messageInput) return;
         this.messageInput.style.height = 'auto';
@@ -996,6 +1007,7 @@ class ClaudeChatApp {
             if (data.count > 0 && data.sessions.length > 0) {
                 const lastSession = data.sessions[0];
                 this.currentSessionId = lastSession.session_id;
+                this.updateOutputsLink();
 
                 // Carregar mensagens da sessão
                 const sessionResp = await fetch(`${this.apiUrl}/sessions/${this.currentSessionId}`);
