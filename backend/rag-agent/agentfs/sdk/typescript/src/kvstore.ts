@@ -64,7 +64,7 @@ export class KvStore {
 
   async list(prefix: string): Promise<{ key: string, value: any }[]> {
     const stmt = this.db.prepare(`SELECT key, value FROM kv_store WHERE key LIKE ? ESCAPE '\\'`);
-    const escaped = prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_');
+    const escaped = prefix.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
     const rows = await stmt.all(escaped + '%') as { key: string, value: string }[];
     return rows.map(r => ({ key: r.key, value: JSON.parse(r.value) }));
   }

@@ -15,6 +15,7 @@ from contextvars import ContextVar
 # Context var para rastrear conversation_id entre chamadas
 conversation_id_var: ContextVar[str] = ContextVar("conversation_id", default="")
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+session_id_var: ContextVar[str] = ContextVar("session_id", default="")
 
 
 class JSONFormatter(logging.Formatter):
@@ -28,6 +29,7 @@ class JSONFormatter(logging.Formatter):
             "message": record.getMessage(),
             "conversation_id": conversation_id_var.get() or None,
             "request_id": request_id_var.get() or None,
+            "session_id": session_id_var.get() or None,
         }
 
         # Adicionar campos extras se existirem
@@ -215,6 +217,18 @@ def set_request_id(request_id: Optional[str] = None) -> str:
 def get_request_id() -> str:
     """Retorna request_id do contexto atual."""
     return request_id_var.get()
+
+
+def set_session_id(session_id: Optional[str] = None) -> str:
+    """Define session_id para o contexto atual."""
+    sid = session_id or "default"
+    session_id_var.set(sid)
+    return sid
+
+
+def get_session_id() -> str:
+    """Retorna session_id do contexto atual."""
+    return session_id_var.get() or "default"
 
 
 # Instância global

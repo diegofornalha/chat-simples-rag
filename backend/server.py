@@ -8,6 +8,8 @@ import json
 import os
 import sys
 import importlib.util
+import asyncio
+import shutil
 
 from claude_agent_sdk import ClaudeSDKClient, AssistantMessage, TextBlock, ProcessError
 
@@ -25,17 +27,94 @@ from core.rate_limiter import get_limiter, RATE_LIMITS, get_client_ip, SLOWAPI_A
 from core.prompt_guard import validate_prompt
 from core.auth import verify_api_key, is_auth_enabled
 
+# Importa funções de logger do RAG agent para session tracking
+rag_logger_path = Path(__file__).parent / "rag-agent" / "core" / "logger.py"
+spec_logger = importlib.util.spec_from_file_location("rag_logger", rag_logger_path)
+rag_logger = importlib.util.module_from_spec(spec_logger)
+spec_logger.loader.exec_module(rag_logger)
+set_session_id = rag_logger.set_session_id
+get_session_id = rag_logger.get_session_id
+
 SESSIONS_DIR = Path.home() / ".claude" / "projects" / "-Users-2a--claude-hello-agent-chat-simples-backend-rag-agent"
+RAG_OUTPUTS_DIR = Path(__file__).parent / "rag-agent" / "outputs"
 
 client: ClaudeSDKClient | None = None
+
+
+def extract_session_id_from_jsonl() -> str:
+    """Extrai session_id do arquivo JSONL mais recente."""
+    if not SESSIONS_DIR.exists():
+        return "default"
+
+    # Pegar JSONL mais recente (por mtime)
+    jsonl_files = sorted(
+        SESSIONS_DIR.glob("*.jsonl"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True
+    )
+
+    if not jsonl_files:
+        return "default"
+
+    latest_jsonl = jsonl_files[0]
+
+    # Ler primeira linha para extrair sessionId
+    try:
+        with open(latest_jsonl, 'r') as f:
+            first_line = f.readline().strip()
+            if first_line:
+                data = json.loads(first_line)
+                session_id = data.get("sessionId", latest_jsonl.stem)
+                return session_id
+    except Exception as e:
+        print(f"[WARN] Não foi possível extrair sessionId: {e}")
+        return latest_jsonl.stem  # Fallback: usar nome do arquivo
+
+    return "default"
+
 
 async def get_client() -> ClaudeSDKClient:
     """Retorna o cliente, criando se necessário."""
     global client
     if client is None:
-        client = ClaudeSDKClient(options=RAG_AGENT_OPTIONS)
-        await client.__aenter__()
+        # Criar cliente temporariamente para obter session_id
+        temp_client = ClaudeSDKClient(options=RAG_AGENT_OPTIONS)
+        await temp_client.__aenter__()
         print("🔗 Nova sessão criada!")
+
+        # Aguardar 100ms para SDK escrever primeira linha do JSONL
+        await asyncio.sleep(0.2)
+
+        # Extrair session_id
+        session_id = extract_session_id_from_jsonl()
+        set_session_id(session_id)
+        print(f"📁 Session ID: {session_id}")
+
+        # Criar pasta da sessão
+        session_output_dir = RAG_OUTPUTS_DIR / session_id
+        session_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"📂 Pasta da sessão criada: {session_output_dir}")
+
+        # Fechar cliente temporário
+        await temp_client.__aexit__(None, None, None)
+
+        # Criar novo options com cwd apontando para a pasta da sessão
+        from claude_agent_sdk import ClaudeAgentOptions
+        session_options = ClaudeAgentOptions(
+            model=RAG_AGENT_OPTIONS.model,
+            system_prompt=RAG_AGENT_OPTIONS.system_prompt,
+            allowed_tools=RAG_AGENT_OPTIONS.allowed_tools,
+            permission_mode=RAG_AGENT_OPTIONS.permission_mode,
+            disallowed_tools=RAG_AGENT_OPTIONS.disallowed_tools,
+            cwd=str(session_output_dir),  # CWD da sessão
+            mcp_servers=RAG_AGENT_OPTIONS.mcp_servers
+        )
+
+        # Criar cliente final com cwd correto
+        client = ClaudeSDKClient(options=session_options)
+        await client.__aenter__()
+        print(f"✅ Cliente configurado com cwd: {session_options.cwd}")
+
     return client
 
 async def reset_client():
@@ -124,6 +203,42 @@ async def health_check():
         }
     }
 
+
+@app.get("/session/current")
+async def get_current_session():
+    """Retorna informações da sessão atual."""
+    global client
+
+    if client is None:
+        return {
+            "active": False,
+            "session_id": None,
+            "message": "Nenhuma sessão ativa"
+        }
+
+    session_id = get_session_id()
+    session_file = SESSIONS_DIR / f"{session_id}.jsonl"
+
+    # Contar mensagens
+    message_count = 0
+    if session_file.exists():
+        message_count = len(session_file.read_text().strip().split('\n'))
+
+    # Verificar outputs no rag-agent
+    session_output_dir = RAG_OUTPUTS_DIR / session_id
+    has_outputs = session_output_dir.exists()
+    output_count = len(list(session_output_dir.iterdir())) if has_outputs else 0
+
+    return {
+        "active": True,
+        "session_id": session_id,
+        "message_count": message_count,
+        "has_outputs": has_outputs,
+        "output_count": output_count,
+        "output_dir": str(session_output_dir) if has_outputs else None
+    }
+
+
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit(RATE_LIMITS["chat"])
 async def chat(
@@ -202,8 +317,20 @@ async def chat_stream(
 @limiter.limit("5/minute")
 async def reset_session(request: Request, api_key: str = Depends(verify_api_key)):
     """Inicia nova sessão (novo JSONL)."""
+    old_session_id = get_session_id()
     await reset_client()
-    return {"status": "ok", "message": "Nova sessão iniciada!"}
+
+    # Aguardar nova sessão ser criada
+    await asyncio.sleep(0.1)
+    new_session_id = extract_session_id_from_jsonl()
+    set_session_id(new_session_id)
+
+    return {
+        "status": "ok",
+        "message": "Nova sessão iniciada!",
+        "old_session_id": old_session_id,
+        "new_session_id": new_session_id
+    }
 
 
 @app.get("/sessions")
@@ -219,6 +346,14 @@ async def list_sessions():
             lines = file.read_text().strip().split('\n')
             message_count = len(lines)
 
+            # Extrair sessionId da primeira linha
+            session_id = file.stem  # Fallback
+            try:
+                first_data = json.loads(lines[0])
+                session_id = first_data.get("sessionId", session_id)
+            except:
+                pass
+
             # Tentar extrair modelo da primeira mensagem
             model = "unknown"
             for line in lines[:5]:
@@ -230,13 +365,20 @@ async def list_sessions():
                 except:
                     pass
 
+            # Verificar se há outputs para esta sessão
+            session_output_dir = RAG_OUTPUTS_DIR / session_id
+            has_outputs = session_output_dir.exists()
+            output_count = len(list(session_output_dir.iterdir())) if has_outputs else 0
+
             sessions.append({
-                "session_id": file.stem,
+                "session_id": session_id,
                 "file_name": file.name,
                 "file": str(file),
                 "message_count": message_count,
                 "model": model,
-                "updated_at": file.stat().st_mtime * 1000
+                "updated_at": file.stat().st_mtime * 1000,
+                "has_outputs": has_outputs,
+                "output_count": output_count
             })
         except Exception as e:
             print(f"Erro ao ler {file}: {e}")
@@ -273,6 +415,94 @@ async def delete_session(session_id: str, api_key: str = Depends(verify_api_key)
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@app.get("/rag-outputs/{session_id}")
+async def list_rag_outputs_by_session(session_id: str):
+    """Lista arquivos de uma sessão específica do RAG agent."""
+    session_dir = RAG_OUTPUTS_DIR / session_id
+
+    if not session_dir.exists():
+        return {"session_id": session_id, "files": [], "count": 0}
+
+    files = []
+    for file in session_dir.iterdir():
+        if file.is_file():
+            stat = file.stat()
+            files.append({
+                "name": file.name,
+                "path": str(file.relative_to(RAG_OUTPUTS_DIR)),
+                "size": stat.st_size,
+                "modified": stat.st_mtime * 1000
+            })
+
+    files.sort(key=lambda f: f["modified"], reverse=True)
+    return {"session_id": session_id, "files": files, "count": len(files)}
+
+
+@app.get("/sessions/{session_id}/rag-outputs")
+async def get_session_rag_outputs_detailed(session_id: str):
+    """Retorna informação detalhada dos outputs RAG de uma sessão."""
+    session_dir = RAG_OUTPUTS_DIR / session_id
+
+    if not session_dir.exists():
+        return {
+            "session_id": session_id,
+            "exists": False,
+            "files": [],
+            "total_size": 0,
+            "count": 0
+        }
+
+    files = []
+    total_size = 0
+
+    for file in session_dir.iterdir():
+        if file.is_file():
+            stat = file.stat()
+            total_size += stat.st_size
+
+            # Ler primeiras linhas para preview
+            preview = ""
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    preview = f.read(200)
+            except:
+                preview = "[binary file]"
+
+            files.append({
+                "name": file.name,
+                "path": str(file.relative_to(RAG_OUTPUTS_DIR)),
+                "size": stat.st_size,
+                "modified": stat.st_mtime * 1000,
+                "preview": preview
+            })
+
+    files.sort(key=lambda f: f["modified"], reverse=True)
+
+    return {
+        "session_id": session_id,
+        "exists": True,
+        "files": files,
+        "total_size": total_size,
+        "count": len(files)
+    }
+
+
+@app.delete("/sessions/{session_id}/rag-outputs")
+async def delete_session_rag_outputs(session_id: str, api_key: str = Depends(verify_api_key)):
+    """Deleta todos os outputs RAG de uma sessão."""
+    session_dir = RAG_OUTPUTS_DIR / session_id
+
+    if not session_dir.exists():
+        return {"success": False, "error": "Sessão não encontrada"}
+
+    try:
+        shutil.rmtree(session_dir)
+        return {"success": True, "message": f"Outputs da sessão {session_id} deletados"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 
 OUTPUTS_DIR = Path(__file__).parent / "outputs"
 
