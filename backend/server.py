@@ -77,43 +77,38 @@ async def get_client() -> ClaudeSDKClient:
     """Retorna o cliente, criando se necessário."""
     global client
     if client is None:
-        # Criar cliente temporariamente para obter session_id
-        temp_client = ClaudeSDKClient(options=RAG_AGENT_OPTIONS)
-        await temp_client.__aenter__()
-        print("🔗 Nova sessão criada!")
+        # Criar cliente único (evita mismatch de session_id)
+        client = ClaudeSDKClient(options=RAG_AGENT_OPTIONS)
+        try:
+            await client.__aenter__()
+            print("🔗 Nova sessão criada!")
 
-        # Aguardar 100ms para SDK escrever primeira linha do JSONL
-        await asyncio.sleep(0.2)
+            # Aguardar SDK escrever primeira linha do JSONL
+            await asyncio.sleep(0.2)
 
-        # Extrair session_id
-        session_id = extract_session_id_from_jsonl()
-        set_session_id(session_id)
-        print(f"📁 Session ID: {session_id}")
+            # Extrair session_id do cliente ativo
+            session_id = extract_session_id_from_jsonl()
+            set_session_id(session_id)
+            print(f"📁 Session ID: {session_id}")
 
-        # Criar pasta da sessão
-        session_output_dir = RAG_OUTPUTS_DIR / session_id
-        session_output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"📂 Pasta da sessão criada: {session_output_dir}")
+            # Criar pasta da sessão para outputs
+            session_output_dir = RAG_OUTPUTS_DIR / session_id
+            session_output_dir.mkdir(parents=True, exist_ok=True)
+            print(f"📂 Pasta da sessão criada: {session_output_dir}")
 
-        # Fechar cliente temporário
-        await temp_client.__aexit__(None, None, None)
+            # Inicializar AgentFS para a sessão
+            from core.agentfs_manager import init_agentfs
+            await init_agentfs(session_id)
+            print(f"🗄️  AgentFS inicializado: ~/.claude/.agentfs/{session_id}.db")
 
-        # Criar novo options com cwd apontando para a pasta da sessão
-        from claude_agent_sdk import ClaudeAgentOptions
-        session_options = ClaudeAgentOptions(
-            model=RAG_AGENT_OPTIONS.model,
-            system_prompt=RAG_AGENT_OPTIONS.system_prompt,
-            allowed_tools=RAG_AGENT_OPTIONS.allowed_tools,
-            permission_mode=RAG_AGENT_OPTIONS.permission_mode,
-            disallowed_tools=RAG_AGENT_OPTIONS.disallowed_tools,
-            cwd=str(session_output_dir),  # CWD da sessão
-            mcp_servers=RAG_AGENT_OPTIONS.mcp_servers
-        )
-
-        # Criar cliente final com cwd correto
-        client = ClaudeSDKClient(options=session_options)
-        await client.__aenter__()
-        print(f"✅ Cliente configurado com cwd: {session_options.cwd}")
+        except Exception as e:
+            # Cleanup em caso de erro durante inicialização
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception:
+                pass
+            client = None
+            raise e
 
     return client
 
@@ -136,6 +131,11 @@ async def lifespan(app: FastAPI):
     if client is not None:
         await client.__aexit__(None, None, None)
         print("👋 Sessão encerrada!")
+
+    # Fechar AgentFS
+    from core.agentfs_manager import close_agentfs
+    await close_agentfs()
+    print("🗄️  AgentFS fechado")
 
 app = FastAPI(
     title="Chat Simples",
