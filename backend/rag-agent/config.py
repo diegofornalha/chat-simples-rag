@@ -75,8 +75,8 @@ Sempre use search_documents antes de responder qualquer pergunta.""",
         "mcp__rag-tools__count_documents",
     ],
 
-    # Modo de permissao
-    permission_mode="acceptEdits",
+    # Modo de permissao - bypass para criar arquivos sem pedir
+    permission_mode="bypassPermissions",
 
     # Ferramentas bloqueadas
     disallowed_tools=[],
