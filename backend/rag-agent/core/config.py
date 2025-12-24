@@ -106,13 +106,13 @@ class RAGConfig:
             RESPONSE_CACHE_SIZE: Tamanho do cache de respostas (default: 1000)
         """
         # Embedding model
-        model_name = os.getenv("EMBEDDING_MODEL", "bge-large")
+        model_name = os.getenv("EMBEDDING_MODEL", "bge-small")
         model_map = {
             "bge-small": EmbeddingModel.BGE_SMALL,
             "bge-base": EmbeddingModel.BGE_BASE,
             "bge-large": EmbeddingModel.BGE_LARGE,
         }
-        embedding_model = model_map.get(model_name, EmbeddingModel.BGE_LARGE)
+        embedding_model = model_map.get(model_name, EmbeddingModel.BGE_SMALL)
 
         # Chunking
         chunking_strategy_name = os.getenv("CHUNKING_STRATEGY", "semantic")
