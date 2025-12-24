@@ -245,6 +245,127 @@ def authenticate(auth_header: Optional[str]) -> AuthResult:
     )
 
 
+# =============================================================================
+# FUNÇÕES PARA FASTAPI - Dependency Injection
+# =============================================================================
+
+import os
+from pathlib import Path
+
+# Carregar variaveis de ambiente do .env
+try:
+    from dotenv import load_dotenv, set_key
+    _env_path = Path(__file__).parent.parent / ".env"
+    load_dotenv(_env_path)
+    _DOTENV_AVAILABLE = True
+except ImportError:
+    _DOTENV_AVAILABLE = False
+    _env_path = None
+
+# Chaves válidas
+VALID_API_KEYS: set[str] = set()
+_AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
+
+# Carregar API Key do .env ou gerar nova
+_api_key = os.getenv("RAG_API_KEY")
+
+if _api_key:
+    # Key encontrada no .env
+    VALID_API_KEYS.add(_api_key)
+    print(f"[AUTH] API Key carregada do .env: {_api_key[:20]}...")
+else:
+    # Gerar nova key
+    _api_key = f"rag_{secrets.token_urlsafe(32)}"
+    VALID_API_KEYS.add(_api_key)
+
+    # Tentar salvar no .env para persistir
+    if _DOTENV_AVAILABLE and _env_path:
+        try:
+            _env_path.touch(exist_ok=True)
+            set_key(str(_env_path), "RAG_API_KEY", _api_key)
+            print(f"[AUTH] Nova API Key gerada e salva em .env")
+            print(f"[AUTH] RAG_API_KEY={_api_key}")
+        except Exception as e:
+            print(f"[AUTH] Aviso: Nao foi possivel salvar no .env: {e}")
+            print(f"[AUTH] API Key temporaria: {_api_key}")
+    else:
+        print(f"[AUTH] API Key temporaria (instale python-dotenv para persistir): {_api_key}")
+
+
+def is_auth_enabled() -> bool:
+    """Verifica se autenticação está habilitada."""
+    return _AUTH_ENABLED
+
+
+from fastapi import Header
+
+async def verify_api_key(
+    x_api_key: str = Header(None, alias="X-API-Key"),
+    authorization: str = Header(None),
+) -> str:
+    """
+    Dependency do FastAPI para verificar API key.
+
+    Aceita chave via:
+    - Header X-API-Key
+    - Header Authorization: Bearer <key>
+
+    Returns:
+        API key se válida
+
+    Raises:
+        HTTPException 401 se inválida
+    """
+    from fastapi import HTTPException, Header
+
+    # Se auth está desabilitada, retorna placeholder
+    if not is_auth_enabled():
+        return "auth_disabled"
+
+    # Extrair chave do header apropriado
+    key = None
+    if x_api_key:
+        key = x_api_key
+    elif authorization:
+        if authorization.startswith("Bearer "):
+            key = authorization[7:]
+        else:
+            key = authorization
+
+    if not key:
+        raise HTTPException(
+            status_code=401,
+            detail="API key required. Use X-API-Key header or Authorization: Bearer <key>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Verificar se é uma chave válida (simples)
+    if key in VALID_API_KEYS:
+        return key
+
+    # Verificar usando o manager (para chaves criadas programaticamente)
+    manager = get_key_manager()
+    result = manager.authenticate(key)
+    if result.authenticated:
+        return key
+
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def add_valid_key(key: str) -> None:
+    """Adiciona uma chave válida."""
+    VALID_API_KEYS.add(key)
+
+
+def remove_valid_key(key: str) -> None:
+    """Remove uma chave válida."""
+    VALID_API_KEYS.discard(key)
+
+
 if __name__ == "__main__":
     print("=== Teste de API Key Auth ===\n")
 

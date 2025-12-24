@@ -11,6 +11,7 @@ fastmcp>=0.1.0
 
 # Seguranca (Semana 1)
 slowapi>=0.1.9            # Rate limiting
+python-dotenv>=1.0.0      # Carregar .env
 
 # AgentFS SDK - Filesystem para agentes com auditoria
 agentfs-sdk>=0.4.0

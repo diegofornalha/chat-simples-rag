@@ -250,17 +250,46 @@ def authenticate(auth_header: Optional[str]) -> AuthResult:
 # =============================================================================
 
 import os
+from pathlib import Path
 
-# Chaves válidas (em desenvolvimento, geradas automaticamente)
+# Carregar variaveis de ambiente do .env
+try:
+    from dotenv import load_dotenv, set_key
+    _env_path = Path(__file__).parent.parent / ".env"
+    load_dotenv(_env_path)
+    _DOTENV_AVAILABLE = True
+except ImportError:
+    _DOTENV_AVAILABLE = False
+    _env_path = None
+
+# Chaves válidas
 VALID_API_KEYS: set[str] = set()
 _AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 
-# Em desenvolvimento, criar uma chave automaticamente
-if os.getenv("ENVIRONMENT", "development") == "development":
-    import secrets
-    _dev_key = secrets.token_urlsafe(32)
-    VALID_API_KEYS.add(_dev_key)
-    print(f"[DEV] API Key temporaria: {_dev_key}")
+# Carregar API Key do .env ou gerar nova
+_api_key = os.getenv("RAG_API_KEY")
+
+if _api_key:
+    # Key encontrada no .env
+    VALID_API_KEYS.add(_api_key)
+    print(f"[AUTH] API Key carregada do .env: {_api_key[:20]}...")
+else:
+    # Gerar nova key
+    _api_key = f"rag_{secrets.token_urlsafe(32)}"
+    VALID_API_KEYS.add(_api_key)
+
+    # Tentar salvar no .env para persistir
+    if _DOTENV_AVAILABLE and _env_path:
+        try:
+            _env_path.touch(exist_ok=True)
+            set_key(str(_env_path), "RAG_API_KEY", _api_key)
+            print(f"[AUTH] Nova API Key gerada e salva em .env")
+            print(f"[AUTH] RAG_API_KEY={_api_key}")
+        except Exception as e:
+            print(f"[AUTH] Aviso: Nao foi possivel salvar no .env: {e}")
+            print(f"[AUTH] API Key temporaria: {_api_key}")
+    else:
+        print(f"[AUTH] API Key temporaria (instale python-dotenv para persistir): {_api_key}")
 
 
 def is_auth_enabled() -> bool:
